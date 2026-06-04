@@ -1,0 +1,9 @@
+bin/
+docs/
+*.log
+*.log.gz
+.DS_Store
+.maplecode/
+.claude
+AGENTS.md
+CLAUDE.md
