@@ -2,9 +2,7 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	"maplecode/pkg/provider"
@@ -79,7 +77,3 @@ func (s *Session) Compact(ctx context.Context, streamer provider.Streamer, newPa
 	}
 	return newSess, nil
 }
-
-// ensure encoding/json import is used (helper for future expansion)
-var _ = json.Marshal
-var _ = os.O_APPEND
