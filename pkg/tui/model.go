@@ -15,8 +15,19 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"maplecode/pkg/provider"
 	"maplecode/pkg/session"
+)
+
+// Role styles for rendering messages.
+var (
+	roleUserStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))  // cyan
+	roleAssistantStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))  // green
+	roleSystemStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))  // yellow
+	thinkingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))             // gray
+	errorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))             // red
 )
 
 // msgState tracks where a single message is in its lifecycle.
@@ -190,6 +201,124 @@ func (m *Model) RenderStatusBar() string {
 	fmt.Fprintf(&b, "model: %s", m.model)
 	if m.thinkingEnabled {
 		fmt.Fprintf(&b, "  thinking: %d", m.thinkingBudget)
+	}
+	return b.String()
+}
+
+// MessageView is a read-only snapshot of a single message, exported so main.go
+// can reason about message state without depending on internal types.
+type MessageView struct {
+	Role             string
+	Content          string
+	Thinking         string
+	ThinkingTokens   int
+	ThinkingExpanded bool
+	State            string // "pending", "streaming", "done", "interrupted", "error"
+}
+
+// MessageViews returns a snapshot of all messages as exported MessageView values.
+func (m *Model) MessageViews() []MessageView {
+	out := make([]MessageView, len(m.messages))
+	for i, msg := range m.messages {
+		out[i] = MessageView{
+			Role:             msg.role,
+			Content:          msg.content,
+			Thinking:         msg.thinking,
+			ThinkingTokens:   msg.thinkingTokens,
+			ThinkingExpanded: msg.thinkingExpanded,
+			State:            msg.state.String(),
+		}
+	}
+	return out
+}
+
+// LastMessageHasThinking reports whether the last message has thinking content.
+func (m *Model) LastMessageHasThinking() bool {
+	if len(m.messages) == 0 {
+		return false
+	}
+	return m.messages[len(m.messages)-1].thinking != ""
+}
+
+// ToggleThinkingExported flips the thinking expansion flag for the i-th message.
+// This is the exported version of toggleThinking for use by the app layer.
+func (m *Model) ToggleThinkingExported(i int) {
+	m.toggleThinking(i)
+}
+
+// RenderMessage renders a single message to a styled string.
+// For done assistant messages, the content is rendered through glamour (markdown).
+// Thinking blocks are shown collapsed or expanded based on the message state.
+func (m *Model) RenderMessage(i int) string {
+	if i < 0 || i >= len(m.messages) {
+		return ""
+	}
+	msg := &m.messages[i]
+
+	var b strings.Builder
+
+	// Role prefix.
+	roleLabel := msg.role
+	switch msg.role {
+	case "user":
+		roleLabel = roleUserStyle.Render("[You]")
+	case "assistant":
+		roleLabel = roleAssistantStyle.Render("[Assistant]")
+	case "system":
+		roleLabel = roleSystemStyle.Render("[System]")
+	default:
+		roleLabel = fmt.Sprintf("[%s]", msg.role)
+	}
+	b.WriteString(roleLabel)
+	b.WriteByte('\n')
+
+	// Thinking block (if any).
+	if msg.thinking != "" {
+		if msg.thinkingExpanded {
+			b.WriteString(thinkingStyle.Render(msg.thinking))
+			b.WriteString("\n\n")
+		} else {
+			b.WriteString(thinkingStyle.Render(formatThinkingLine(msg.thinkingTokens)))
+			b.WriteByte('\n')
+		}
+	}
+
+	// Content.
+	content := msg.content
+	if msg.state == stateDone && msg.role == "assistant" && content != "" {
+		rendered := renderMarkdown(content)
+		if rendered != "" {
+			content = rendered
+		}
+	}
+
+	// State indicators.
+	switch msg.state {
+	case stateStreaming:
+		if content == "" {
+			content = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("...")
+		}
+	case stateInterrupted:
+		if content != "" {
+			content += " "
+		}
+		content += lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("[interrupted]")
+	case stateError:
+		content = errorStyle.Render("[error] ") + content
+	}
+
+	b.WriteString(content)
+	return b.String()
+}
+
+// RenderMessages renders all messages into a single string suitable for a viewport.
+func (m *Model) RenderMessages() string {
+	var b strings.Builder
+	for i := range m.messages {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(m.RenderMessage(i))
 	}
 	return b.String()
 }

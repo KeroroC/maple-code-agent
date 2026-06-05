@@ -16,7 +16,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"maplecode/pkg/config"
 	"maplecode/pkg/logx"
@@ -147,20 +150,49 @@ type chunkSender interface {
 // values to tea.Msg values, and rendering the viewport.
 type app struct {
 	*tui.Model
-	streamer   provider.Streamer
-	sess       *session.Session
-	cfg        *config.Config
-	ctx        context.Context
-	cancel     context.CancelFunc
-	input      strings.Builder
-	program    chunkSender
-	streaming  bool
+	streamer    provider.Streamer
+	sess        *session.Session
+	cfg         *config.Config
+	ctx         context.Context
+	cancel      context.CancelFunc
+	program     chunkSender
+	streaming   bool
 	sessionsDir string
+	viewport    viewport.Model
+	textarea    textarea.Model
+	width       int
+	height      int
 }
 
 func newApp(m *tui.Model, s provider.Streamer, sess *session.Session, cfg *config.Config, sessionsDir string) *app {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &app{Model: m, streamer: s, sess: sess, cfg: cfg, ctx: ctx, cancel: cancel, sessionsDir: sessionsDir}
+
+	ta := textarea.New()
+	ta.Placeholder = "Send a message..."
+	ta.ShowLineNumbers = false
+	ta.SetWidth(80)
+	ta.SetHeight(1)
+	ta.Focus()
+
+	vp := viewport.New(80, 20)
+	vp.SetContent(m.RenderMessages())
+	vp.GotoBottom()
+	// Disable viewport key bindings to avoid conflicts with textarea.
+	vp.KeyMap = viewport.KeyMap{}
+
+	return &app{
+		Model:       m,
+		streamer:    s,
+		sess:        sess,
+		cfg:         cfg,
+		ctx:         ctx,
+		cancel:      cancel,
+		sessionsDir: sessionsDir,
+		textarea:    ta,
+		viewport:    vp,
+		width:       80,
+		height:      24,
+	}
 }
 
 // setProgram hands the running Bubble Tea program to the app so the streaming
@@ -168,17 +200,44 @@ func newApp(m *tui.Model, s provider.Streamer, sess *session.Session, cfg *confi
 // after tea.NewProgram returns.
 func (a *app) setProgram(p *tea.Program) { a.program = p }
 
-// Init returns a no-op command.
-func (a *app) Init() tea.Cmd { return nil }
+// Init returns the textarea focus command so the cursor blinks from the start.
+func (a *app) Init() tea.Cmd { return a.textarea.Focus() }
+
+// refreshView re-renders all messages into the viewport and scrolls to the bottom.
+func (a *app) refreshView() {
+	a.viewport.SetContent(a.Model.RenderMessages())
+	a.viewport.GotoBottom()
+}
 
 // Update is the central event router. KeyMsg drives the input line and the
 // chunkMsg values from the streaming goroutine update the model.
 func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var (
+		taCmd  tea.Cmd
+		vpCmd  tea.Cmd
+		cmds   []tea.Cmd
+	)
+
 	switch v := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.width = v.Width
+		a.height = v.Height
+		// Layout: viewport (most space) + status bar (1 line) + textarea (1 line)
+		textareaHeight := 1
+		statusBarHeight := 1
+		a.textarea.SetWidth(v.Width)
+		a.textarea.SetHeight(textareaHeight)
+		a.viewport.Width = v.Width
+		a.viewport.Height = v.Height - textareaHeight - statusBarHeight
+		a.refreshView()
+		return a, nil
+
 	case tea.KeyMsg:
 		return a.onKey(v)
+
 	case chunkMsg:
 		a.Model.HandleChunk(v.c)
+		a.refreshView()
 		if _, done := v.c.(provider.Done); done {
 			a.streaming = false
 			return a, nil
@@ -187,28 +246,26 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.Is(se.Err, provider.ErrCanceled) {
 				a.streaming = false
 			}
-			// other stream errors fall through; bubble tea keeps running
 		}
 		return a, nil
 	}
-	return a, nil
+
+	// Forward unhandled messages to textarea and viewport.
+	a.textarea, taCmd = a.textarea.Update(msg)
+	a.viewport, vpCmd = a.viewport.Update(msg)
+	cmds = append(cmds, taCmd, vpCmd)
+	return a, tea.Batch(cmds...)
 }
 
-// View is a simple plaintext render: message list + status bar + input prompt.
+// View renders the three-section layout: viewport, status bar, textarea.
 func (a *app) View() string {
-	var b strings.Builder
-	for _, m := range a.Model.Snapshot() {
-		role := m.Role
-		if role == "" {
-			role = "assistant"
-		}
-		fmt.Fprintf(&b, "[%s] %s\n", role, m.Content)
-	}
-	b.WriteString("\n")
-	b.WriteString(a.Model.RenderStatusBar())
-	b.WriteString("\n> ")
-	b.WriteString(a.input.String())
-	return b.String()
+	statusBar := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("0")).
+		Background(lipgloss.Color("6")).
+		Width(a.width).
+		Render(a.Model.RenderStatusBar())
+
+	return fmt.Sprintf("%s\n%s\n%s", a.viewport.View(), statusBar, a.textarea.View())
 }
 
 func (a *app) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -216,15 +273,23 @@ func (a *app) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		if a.streaming {
 			a.cancel()
-			// keep running; the next chunk from the goroutine will arrive as
-			// StreamError(ErrCanceled) and flip streaming off.
 			return a, nil
 		}
 		a.cancel()
 		return a, tea.Quit
+
+	case "tab":
+		// Toggle thinking expansion on the last message.
+		if a.Model.LastMessageHasThinking() {
+			views := a.Model.MessageViews()
+			a.Model.ToggleThinkingExported(len(views) - 1)
+			a.refreshView()
+		}
+		return a, nil
+
 	case "enter":
-		text := strings.TrimSpace(a.input.String())
-		a.input.Reset()
+		text := strings.TrimSpace(a.textarea.Value())
+		a.textarea.Reset()
 		if text == "" {
 			return a, nil
 		}
@@ -235,33 +300,45 @@ func (a *app) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			if a.streaming {
 				a.Model.AppendSystemError("busy: a stream is already in progress")
+				a.refreshView()
 				return a, nil
 			}
 			if kind == "resume" {
-				return a.handleResume(args), nil
+				a.handleResume(args)
+				a.refreshView()
+				return a, nil
 			}
 			if kind == "compact" {
-				return a.handleCompact(), nil
+				a.handleCompact()
+				a.refreshView()
+				return a, nil
 			}
 			if kind == "help" {
 				a.Model.AppendSystemMessage(tui.HelpText())
+				a.refreshView()
 				return a, nil
 			}
 			if err := a.Model.ExecuteCommand(tui.Command{Kind: kind, Args: args}); err != nil {
 				a.Model.AppendSystemError(err.Error())
 			}
+			a.refreshView()
 			return a, nil
 		}
 		if a.streaming {
 			a.Model.AppendSystemError("busy: a stream is already in progress")
+			a.refreshView()
 			return a, nil
 		}
 		a.Model.UserSubmitted(text)
 		a.streaming = true
+		a.refreshView()
 		return a, a.startStream()
 	}
-	a.input.WriteString(k.String())
-	return a, nil
+
+	// Forward all other keys to the textarea.
+	var cmd tea.Cmd
+	a.textarea, cmd = a.textarea.Update(k)
+	return a, cmd
 }
 
 // chunkMsg carries one provider.Chunk through the Bubble Tea Update loop.

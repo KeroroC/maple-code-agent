@@ -165,10 +165,10 @@ func TestWireTurnsFromSession_DropsSystemTurns(t *testing.T) {
 
 func TestOnKey_EnterStartsStreamAndClearsInput(t *testing.T) {
 	a, _ := newTestApp(t, &scriptedStreamer{})
-	a.input.WriteString("hello world")
+	a.textarea.SetValue("hello world")
 	_, _ = a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
-	if a.input.Len() != 0 {
-		t.Errorf("input should be cleared after Enter, got %q", a.input.String())
+	if a.textarea.Value() != "" {
+		t.Errorf("input should be cleared after Enter, got %q", a.textarea.Value())
 	}
 	if !a.streaming {
 		t.Error("after Enter, streaming should be true")
@@ -182,10 +182,10 @@ func TestOnKey_EnterStartsStreamAndClearsInput(t *testing.T) {
 func TestOnKey_EnterWhileStreamingIsRejected(t *testing.T) {
 	a, _ := newTestApp(t, &scriptedStreamer{})
 	a.streaming = true
-	a.input.WriteString("another question")
+	a.textarea.SetValue("another question")
 	_, _ = a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
-	if a.input.Len() != 0 {
-		t.Errorf("input should be cleared even on rejected submit, got %q", a.input.String())
+	if a.textarea.Value() != "" {
+		t.Errorf("input should be cleared even on rejected submit, got %q", a.textarea.Value())
 	}
 	snap := a.Model.Snapshot()
 	if len(snap) == 0 {
@@ -211,7 +211,7 @@ func TestOnKey_CtrlCWhileStreamingCancelsButDoesNotQuit(t *testing.T) {
 
 func TestOnKey_ExitCommandQuits(t *testing.T) {
 	a, _ := newTestApp(t, &scriptedStreamer{})
-	a.input.WriteString("/exit")
+	a.textarea.SetValue("/exit")
 	_, cmd := a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected non-nil cmd from /exit")
@@ -220,7 +220,7 @@ func TestOnKey_ExitCommandQuits(t *testing.T) {
 
 func TestOnKey_HelpCommandShowsHelpText(t *testing.T) {
 	a, _ := newTestApp(t, &scriptedStreamer{})
-	a.input.WriteString("/help")
+	a.textarea.SetValue("/help")
 	_, _ = a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
 
 	snap := a.Model.Snapshot()
@@ -254,7 +254,7 @@ func TestOnKey_ResumeCommandLoadsSession(t *testing.T) {
 	_ = otherSess.Close()
 
 	oldID := a.sess.ID()
-	a.input.WriteString("/resume 20260601-120000-other")
+	a.textarea.SetValue("/resume 20260601-120000-other")
 	_, _ = a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
 
 	if a.sess.ID() == oldID {
@@ -275,7 +275,7 @@ func TestOnKey_ResumeCommandLoadsSession(t *testing.T) {
 func TestOnKey_ResumeWhileStreamingIsRejected(t *testing.T) {
 	a, _ := newTestApp(t, &scriptedStreamer{})
 	a.streaming = true
-	a.input.WriteString("/resume something")
+	a.textarea.SetValue("/resume something")
 	_, _ = a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
 
 	snap := a.Model.Snapshot()
@@ -304,7 +304,7 @@ func TestOnKey_CompactCommandSummarizes(t *testing.T) {
 	a.Model.HandleChunk(provider.Done{})
 
 	oldID := a.sess.ID()
-	a.input.WriteString("/compact")
+	a.textarea.SetValue("/compact")
 	_, _ = a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
 
 	if a.sess.ID() == oldID {
