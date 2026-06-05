@@ -21,7 +21,7 @@ func TestOpenAICompatStreamer_UsesConfiguredBaseURL(t *testing.T) {
 		originalHandler.ServeHTTP(w, r)
 	})
 
-	s := NewOpenAIStreamer("test-key", "custom-model", srv.URL)
+	s := NewOpenAICompatStreamer("test-key", "custom-model", srv.URL)
 	ch, err := s.Stream(context.Background(), "system", nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)

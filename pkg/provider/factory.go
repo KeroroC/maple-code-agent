@@ -20,8 +20,10 @@ func NewStreamer(cfg StreamerConfig) (Streamer, error) {
 	switch cfg.Protocol {
 	case "anthropic":
 		return NewAnthropicStreamer(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Thinking), nil
-	case "openai", "openai-compatible":
+	case "openai":
 		return NewOpenAIStreamer(cfg.APIKey, cfg.Model, cfg.BaseURL), nil
+	case "openai-compatible":
+		return NewOpenAICompatStreamer(cfg.APIKey, cfg.Model, cfg.BaseURL), nil
 	default:
 		return nil, fmt.Errorf("unsupported protocol %q", cfg.Protocol)
 	}
