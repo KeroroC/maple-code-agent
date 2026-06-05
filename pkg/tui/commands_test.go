@@ -37,7 +37,7 @@ func TestParseCommand_RecognizesAllBuiltinCommands(t *testing.T) {
 }
 
 func TestHelpText_ContainsAllCommandNames(t *testing.T) {
-	help := helpText()
+	help := HelpText()
 	for _, name := range []string{"clear", "resume", "compact", "thinking", "model", "help", "exit"} {
 		if !strings.Contains(help, name) {
 			t.Errorf("help text missing %q, got:\n%s", name, help)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -77,7 +78,7 @@ func newTestApp(t *testing.T, st provider.Streamer) (*app, *fakeSender) {
 
 	chat := tui.New(sess, st, "m", false, 0)
 	cfg := &config.Config{Protocol: "anthropic", Model: "m", SystemPrompt: "test"}
-	a := newApp(chat, st, sess, cfg)
+	a := newApp(chat, st, sess, cfg, dir)
 	sender := &fakeSender{}
 	a.program = sender
 	return a, sender
@@ -214,5 +215,111 @@ func TestOnKey_ExitCommandQuits(t *testing.T) {
 	_, cmd := a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected non-nil cmd from /exit")
+	}
+}
+
+func TestOnKey_HelpCommandShowsHelpText(t *testing.T) {
+	a, _ := newTestApp(t, &scriptedStreamer{})
+	a.input.WriteString("/help")
+	_, _ = a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	snap := a.Model.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("expected help text in messages")
+	}
+	last := snap[len(snap)-1]
+	if last.Role != "system" {
+		t.Errorf("help message role = %q, want system", last.Role)
+	}
+	for _, name := range []string{"clear", "resume", "compact", "thinking", "model", "help", "exit"} {
+		if !strings.Contains(last.Content, name) {
+			t.Errorf("help text missing %q", name)
+		}
+	}
+}
+
+func TestOnKey_ResumeCommandLoadsSession(t *testing.T) {
+	a, _ := newTestApp(t, &scriptedStreamer{})
+
+	// Create a second session file to resume.
+	otherPath := a.sessionsDir + "/20260601-120000-other.jsonl"
+	otherSess, err := session.New(otherPath, session.Metadata{
+		ID: "20260601-120000-other", Created: time.Now().UTC(), Protocol: "openai", Model: "gpt",
+	})
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	_ = otherSess.Append(session.Turn{Role: "user", Content: "previous question"})
+	_ = otherSess.Append(session.Turn{Role: "assistant", Content: "previous answer"})
+	_ = otherSess.Close()
+
+	oldID := a.sess.ID()
+	a.input.WriteString("/resume 20260601-120000-other")
+	_, _ = a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if a.sess.ID() == oldID {
+		t.Error("session was not swapped after /resume")
+	}
+	snap := a.Model.Snapshot()
+	if len(snap) < 2 {
+		t.Fatalf("expected >=2 messages from resumed session, got %d", len(snap))
+	}
+	if snap[0].Content != "previous question" {
+		t.Errorf("message 0 = %q, want 'previous question'", snap[0].Content)
+	}
+	if snap[1].Content != "previous answer" {
+		t.Errorf("message 1 = %q, want 'previous answer'", snap[1].Content)
+	}
+}
+
+func TestOnKey_ResumeWhileStreamingIsRejected(t *testing.T) {
+	a, _ := newTestApp(t, &scriptedStreamer{})
+	a.streaming = true
+	a.input.WriteString("/resume something")
+	_, _ = a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	snap := a.Model.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("expected a system error message")
+	}
+	last := snap[len(snap)-1]
+	if last.Content != "[error] busy: a stream is already in progress" {
+		t.Errorf("last message = %q, want busy error", last.Content)
+	}
+}
+
+func TestOnKey_CompactCommandSummarizes(t *testing.T) {
+	summaryStreamer := &scriptedStreamer{chunks: []provider.Chunk{
+		provider.TextDelta{Text: "User asked about Go. "},
+		provider.TextDelta{Text: "Assistant explained channels."},
+		provider.Done{},
+	}}
+	a, _ := newTestApp(t, summaryStreamer)
+
+	// Seed some conversation so compact has something to summarize.
+	_ = a.sess.Append(session.Turn{Role: "user", Content: "how do channels work?"})
+	_ = a.sess.Append(session.Turn{Role: "assistant", Content: "channels are typed conduits..."})
+	a.Model.UserSubmitted("tell me more")
+	a.Model.HandleChunk(provider.TextDelta{Text: "sure, "})
+	a.Model.HandleChunk(provider.Done{})
+
+	oldID := a.sess.ID()
+	a.input.WriteString("/compact")
+	_, _ = a.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if a.sess.ID() == oldID {
+		t.Error("session was not swapped after /compact")
+	}
+	snap := a.Model.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("expected at least one message (the summary)")
+	}
+	// The first message should be the system summary from the fake streamer.
+	if snap[0].Role != "system" {
+		t.Errorf("first message role = %q, want system", snap[0].Role)
+	}
+	want := "User asked about Go. Assistant explained channels."
+	if snap[0].Content != want {
+		t.Errorf("summary = %q, want %q", snap[0].Content, want)
 	}
 }
