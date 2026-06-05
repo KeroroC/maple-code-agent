@@ -149,6 +149,11 @@ func (m *Model) HandleChunk(c provider.Chunk) {
 	}
 }
 
+// AppendSystemMessage adds a synthetic system message to the conversation area.
+func (m *Model) AppendSystemMessage(text string) {
+	m.messages = append(m.messages, message{role: "system", content: text, state: stateDone})
+}
+
 // AppendSystemError adds a synthetic message that displays the given error text
 // inline. Used by the bubbletea glue when /clear / /help / etc surface a problem.
 func (m *Model) AppendSystemError(text string) {
@@ -161,6 +166,16 @@ func (m *Model) toggleThinking(i int) {
 		return
 	}
 	m.messages[i].thinkingExpanded = !m.messages[i].thinkingExpanded
+}
+
+// SetSession replaces the current session and reloads messages from it.
+// Used by /resume and /compact which swap the underlying session file.
+func (m *Model) SetSession(s *session.Session) {
+	m.session = s
+	m.messages = []message{}
+	for _, t := range s.Snapshot() {
+		m.messages = append(m.messages, message{role: t.Role, content: t.Content, state: stateDone})
+	}
 }
 
 // clearConversation empties the in-memory message list and resets the session.

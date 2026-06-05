@@ -30,8 +30,8 @@ func ParseCommand(input string) (string, string, bool) {
 	return "unknown", input, true
 }
 
-// helpText returns the multi-line help text rendered when the user types /help.
-func helpText() string {
+// HelpText returns the multi-line help text rendered when the user types /help.
+func HelpText() string {
 	return strings.Join([]string{
 		"Available commands:",
 		"  /clear                    reset the current session and start a new one",

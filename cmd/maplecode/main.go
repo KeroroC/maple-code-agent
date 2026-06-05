@@ -81,8 +81,9 @@ func run(configPath string, debug bool, resumeID string) error {
 	defer sess.Close()
 	logx.Info("session opened id=%s", sess.ID())
 
+	sessionsDir := filepath.Join(filepath.Dir(configPath), "sessions")
 	chat := tui.New(sess, streamer, cfg.Model, cfg.Thinking.Enabled, cfg.Thinking.BudgetTokens)
-	app := newApp(chat, streamer, sess, cfg)
+	app := newApp(chat, streamer, sess, cfg, sessionsDir)
 	prog := tea.NewProgram(app, tea.WithAltScreen())
 	app.setProgram(prog)
 	_, err = prog.Run()
@@ -146,19 +147,20 @@ type chunkSender interface {
 // values to tea.Msg values, and rendering the viewport.
 type app struct {
 	*tui.Model
-	streamer provider.Streamer
-	sess     *session.Session
-	cfg      *config.Config
-	ctx      context.Context
-	cancel   context.CancelFunc
-	input    strings.Builder
-	program  chunkSender
-	streaming bool
+	streamer   provider.Streamer
+	sess       *session.Session
+	cfg        *config.Config
+	ctx        context.Context
+	cancel     context.CancelFunc
+	input      strings.Builder
+	program    chunkSender
+	streaming  bool
+	sessionsDir string
 }
 
-func newApp(m *tui.Model, s provider.Streamer, sess *session.Session, cfg *config.Config) *app {
+func newApp(m *tui.Model, s provider.Streamer, sess *session.Session, cfg *config.Config, sessionsDir string) *app {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &app{Model: m, streamer: s, sess: sess, cfg: cfg, ctx: ctx, cancel: cancel}
+	return &app{Model: m, streamer: s, sess: sess, cfg: cfg, ctx: ctx, cancel: cancel, sessionsDir: sessionsDir}
 }
 
 // setProgram hands the running Bubble Tea program to the app so the streaming
@@ -231,6 +233,20 @@ func (a *app) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				a.cancel()
 				return a, tea.Quit
 			}
+			if a.streaming {
+				a.Model.AppendSystemError("busy: a stream is already in progress")
+				return a, nil
+			}
+			if kind == "resume" {
+				return a.handleResume(args), nil
+			}
+			if kind == "compact" {
+				return a.handleCompact(), nil
+			}
+			if kind == "help" {
+				a.Model.AppendSystemMessage(tui.HelpText())
+				return a, nil
+			}
 			if err := a.Model.ExecuteCommand(tui.Command{Kind: kind, Args: args}); err != nil {
 				a.Model.AppendSystemError(err.Error())
 			}
@@ -256,7 +272,10 @@ type chunkMsg struct{ c provider.Chunk }
 // goroutine uses program.Send so the chunks arrive back in Update without
 // deadlocking the cmd's return path.
 func (a *app) startStream() tea.Cmd {
-	ctx := a.ctx
+	// Create a fresh context so Ctrl+C from a previous stream doesn't poison this one.
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+
 	streamer := a.streamer
 	systemPrompt := a.cfg.SystemPrompt
 	if systemPrompt == "" {
@@ -283,6 +302,50 @@ func (a *app) startStream() tea.Cmd {
 		}
 		return nil
 	}
+}
+
+// handleResume loads a previous session by ID prefix and swaps it in.
+func (a *app) handleResume(id string) tea.Model {
+	if id == "" {
+		a.Model.AppendSystemError("usage: /resume <id|timestamp>")
+		return a
+	}
+	match, err := findSessionFile(a.sessionsDir, id)
+	if err != nil {
+		a.Model.AppendSystemError(fmt.Sprintf("resume: %v", err))
+		return a
+	}
+	newSess, err := session.Open(match)
+	if err != nil {
+		a.Model.AppendSystemError(fmt.Sprintf("resume: %v", err))
+		return a
+	}
+	_ = a.sess.Close()
+	a.sess = newSess
+	a.Model.SetSession(newSess)
+	logx.Info("resumed session id=%s", newSess.ID())
+	return a
+}
+
+// handleCompact summarizes the current session and replaces it with a new one.
+func (a *app) handleCompact() tea.Model {
+	now := time.Now().UTC()
+	newID := now.Format("20060102-150405") + "-compact"
+	newPath := filepath.Join(a.sessionsDir, newID+".jsonl")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+
+	newSess, err := a.sess.Compact(ctx, a.streamer, newPath, newID, now)
+	if err != nil {
+		a.Model.AppendSystemError(fmt.Sprintf("compact failed: %v", err))
+		return a
+	}
+	_ = a.sess.Close()
+	a.sess = newSess
+	a.Model.SetSession(newSess)
+	logx.Info("compacted session, new id=%s", newSess.ID())
+	return a
 }
 
 // wireTurnsFromSession rebuilds the wire-format turn list from the session
