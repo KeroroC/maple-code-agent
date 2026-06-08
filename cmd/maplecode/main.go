@@ -182,9 +182,10 @@ type app struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	program     chunkSender
-	streaming   bool
-	sessionsDir string
-	registry    *tool.Registry
+	streaming    bool
+	toolExecuted bool // true after first tool call in current turn
+	sessionsDir  string
+	registry     *tool.Registry
 	viewport    viewport.Model
 	textarea    textarea.Model
 	width       int
@@ -282,6 +283,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return a, nil
 		case provider.ToolCallDelta:
+			// Only execute the first tool call per turn.
+			if a.toolExecuted {
+				return a, nil
+			}
+			a.toolExecuted = true
 			// Execute the tool in a goroutine.
 			go func() {
 				t, err := a.registry.Lookup(c.ToolName)
@@ -404,6 +410,7 @@ func (a *app) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		a.Model.UserSubmitted(text)
 		a.streaming = true
+		a.toolExecuted = false
 		a.refreshView()
 		return a, a.startStream()
 	}
