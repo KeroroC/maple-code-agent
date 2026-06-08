@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 )
 
@@ -51,10 +52,19 @@ type StreamError struct {
 	Err error
 }
 
-func (TextDelta) chunk()    {}
-func (ThinkingDelta) chunk() {}
-func (Done) chunk()         {}
-func (StreamError) chunk()  {}
+// ToolCallDelta signals that the model is requesting a tool invocation.
+// The caller should execute the named tool with the given JSON arguments.
+type ToolCallDelta struct {
+	CallID   string          // provider-specific call ID
+	ToolName string          // registered tool name (snake_case)
+	ArgsJSON json.RawMessage // complete JSON arguments
+}
+
+func (TextDelta) chunk()      {}
+func (ThinkingDelta) chunk()  {}
+func (Done) chunk()           {}
+func (StreamError) chunk()    {}
+func (ToolCallDelta) chunk()  {}
 
 // Sentinel errors. Use errors.Is to classify stream failures.
 var (
