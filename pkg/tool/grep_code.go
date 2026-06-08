@@ -79,6 +79,9 @@ func (t *GrepCodeTool) Execute(args json.RawMessage) ToolResult {
 				}
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			return nil
+		}
 		return nil
 	})
 	if err != nil && !strings.Contains(err.Error(), "limit reached") {
