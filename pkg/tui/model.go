@@ -57,14 +57,23 @@ func (s msgState) String() string {
 	return "unknown"
 }
 
+// toolStatus tracks an in-progress or completed tool execution for display.
+type toolStatus struct {
+	name    string
+	done    bool
+	failed  bool
+	summary string
+}
+
 // message is one user or assistant turn rendered in the conversation area.
 type message struct {
-	role            string
-	content         string
-	thinking        string
-	thinkingTokens  int // approximate token count (chars/4)
+	role             string
+	content          string
+	thinking         string
+	thinkingTokens   int // approximate token count (chars/4)
 	thinkingExpanded bool
-	state           msgState
+	state            msgState
+	toolCall         *toolStatus // non-nil when this message has a tool call
 }
 
 // Model is the top-level TUI model. It is exported because main.go and the
@@ -148,6 +157,8 @@ func (m *Model) HandleChunk(c provider.Chunk) {
 		if m.session != nil {
 			_ = m.session.Append(session.Turn{Role: "assistant", Content: last.content})
 		}
+	case provider.ToolCallDelta:
+		last.toolCall = &toolStatus{name: v.ToolName, done: false}
 	case provider.StreamError:
 		if errors.Is(v.Err, provider.ErrCanceled) {
 			last.state = stateInterrupted
@@ -156,6 +167,18 @@ func (m *Model) HandleChunk(c provider.Chunk) {
 			}
 		} else {
 			last.state = stateError
+		}
+	}
+}
+
+// SetToolResult marks the most recent tool call with the given name as done or failed.
+func (m *Model) SetToolResult(toolName string, ok bool, summary string) {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].toolCall != nil && m.messages[i].toolCall.name == toolName && !m.messages[i].toolCall.done {
+			m.messages[i].toolCall.done = true
+			m.messages[i].toolCall.failed = !ok
+			m.messages[i].toolCall.summary = summary
+			return
 		}
 	}
 }
@@ -308,6 +331,23 @@ func (m *Model) RenderMessage(i int) string {
 	}
 
 	b.WriteString(content)
+
+	// Tool status line.
+	if msg.toolCall != nil {
+		b.WriteString("\n")
+		if msg.toolCall.done {
+			if msg.toolCall.failed {
+				b.WriteString(errorStyle.Render(fmt.Sprintf("tool: %s ... failed", msg.toolCall.name)))
+			} else {
+				b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render(
+					fmt.Sprintf("tool: %s ... done", msg.toolCall.name)))
+			}
+		} else {
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(
+				fmt.Sprintf("tool: %s ... running", msg.toolCall.name)))
+		}
+	}
+
 	return b.String()
 }
 

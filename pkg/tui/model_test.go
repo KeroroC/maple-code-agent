@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -123,5 +124,93 @@ func TestModel_StatusBarIncludesModelName(t *testing.T) {
 	out := m.RenderStatusBar()
 	if !strings.Contains(out, "claude-test") {
 		t.Errorf("status bar missing model name: %q", out)
+	}
+}
+
+func TestHandleChunk_ToolCallDelta(t *testing.T) {
+	m := newTestModel()
+	m.UserSubmitted("read main.go")
+
+	// Simulate a ToolCallDelta
+	m.HandleChunk(provider.ToolCallDelta{
+		CallID:   "call_1",
+		ToolName: "read_file",
+		ArgsJSON: json.RawMessage(`{"path":"main.go"}`),
+	})
+
+	last := m.messages[len(m.messages)-1]
+	if last.toolCall == nil {
+		t.Fatal("expected toolCall to be set")
+	}
+	if last.toolCall.name != "read_file" {
+		t.Fatalf("got name %s, want read_file", last.toolCall.name)
+	}
+	if last.toolCall.done {
+		t.Fatal("expected tool to not be done yet")
+	}
+}
+
+func TestSetToolResult(t *testing.T) {
+	m := newTestModel()
+	m.UserSubmitted("read main.go")
+	m.HandleChunk(provider.ToolCallDelta{
+		CallID:   "call_1",
+		ToolName: "read_file",
+	})
+
+	// Mark as done
+	m.SetToolResult("read_file", true, "read 100 bytes")
+
+	last := m.messages[len(m.messages)-1]
+	if !last.toolCall.done {
+		t.Fatal("expected tool to be done")
+	}
+	if last.toolCall.failed {
+		t.Fatal("expected tool to not be failed")
+	}
+}
+
+func TestSetToolResult_Failed(t *testing.T) {
+	m := newTestModel()
+	m.UserSubmitted("read main.go")
+	m.HandleChunk(provider.ToolCallDelta{
+		CallID:   "call_1",
+		ToolName: "read_file",
+	})
+
+	m.SetToolResult("read_file", false, "file not found")
+
+	last := m.messages[len(m.messages)-1]
+	if !last.toolCall.done {
+		t.Fatal("expected tool to be done")
+	}
+	if !last.toolCall.failed {
+		t.Fatal("expected tool to be failed")
+	}
+}
+
+func TestRenderMessage_ToolStatus(t *testing.T) {
+	m := newTestModel()
+	m.UserSubmitted("read main.go")
+	m.HandleChunk(provider.TextDelta{Text: "I'll read the file"})
+	m.HandleChunk(provider.Done{})
+	m.HandleChunk(provider.ToolCallDelta{
+		CallID:   "call_1",
+		ToolName: "read_file",
+	})
+
+	rendered := m.RenderMessage(len(m.messages) - 1)
+	if !strings.Contains(rendered, "tool: read_file") {
+		t.Fatalf("expected tool status in rendered output: %s", rendered)
+	}
+	if !strings.Contains(rendered, "running") {
+		t.Fatalf("expected 'running' in rendered output: %s", rendered)
+	}
+
+	// Mark done and re-render
+	m.SetToolResult("read_file", true, "ok")
+	rendered = m.RenderMessage(len(m.messages) - 1)
+	if !strings.Contains(rendered, "done") {
+		t.Fatalf("expected 'done' in rendered output: %s", rendered)
 	}
 }
