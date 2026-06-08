@@ -6,11 +6,12 @@ import "fmt"
 // needs. The config package builds this from YAML; passing it in keeps the provider
 // package free of config-package imports.
 type StreamerConfig struct {
-	Protocol     string
-	Model        string
-	BaseURL      string
-	APIKey       string
-	Thinking     ThinkingConfig
+	Protocol string
+	Model    string
+	BaseURL  string
+	APIKey   string
+	Thinking ThinkingConfig
+	Tools    []ToolMeta
 }
 
 // NewStreamer returns a Streamer that matches the given protocol. The base URL is
@@ -19,7 +20,7 @@ type StreamerConfig struct {
 func NewStreamer(cfg StreamerConfig) (Streamer, error) {
 	switch cfg.Protocol {
 	case "anthropic":
-		return NewAnthropicStreamer(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Thinking), nil
+		return NewAnthropicStreamer(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Thinking, ToAnthropicTools(cfg.Tools)), nil
 	case "openai":
 		return NewOpenAIStreamer(cfg.APIKey, cfg.Model, cfg.BaseURL), nil
 	case "openai-compatible":

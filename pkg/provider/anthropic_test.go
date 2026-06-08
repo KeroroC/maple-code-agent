@@ -44,7 +44,7 @@ func TestAnthropicStreamer_TextDeltaMappedToTextChunk(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewAnthropicStreamer("test-key", "claude-test", srv.URL, ThinkingConfig{Enabled: false})
+	s := NewAnthropicStreamer("test-key", "claude-test", srv.URL, ThinkingConfig{Enabled: false}, nil)
 	ch, err := s.Stream(context.Background(), "system", []Turn{{Role: "user", Content: "hi"}})
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -90,7 +90,7 @@ func TestAnthropicStreamer_ThinkingDeltaMappedToThinkingChunk(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewAnthropicStreamer("test-key", "claude-test", srv.URL, ThinkingConfig{Enabled: true, BudgetTokens: 1024})
+	s := NewAnthropicStreamer("test-key", "claude-test", srv.URL, ThinkingConfig{Enabled: true, BudgetTokens: 1024}, nil)
 	ch, _ := s.Stream(context.Background(), "system", []Turn{{Role: "user", Content: "hi"}})
 
 	var text, thinking strings.Builder
@@ -120,7 +120,7 @@ func TestAnthropicStreamer_UnauthorizedMapsToErrAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewAnthropicStreamer("bad", "claude-test", srv.URL, ThinkingConfig{Enabled: false})
+	s := NewAnthropicStreamer("bad", "claude-test", srv.URL, ThinkingConfig{Enabled: false}, nil)
 	ch, err := s.Stream(context.Background(), "system", nil)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -135,4 +135,101 @@ func TestAnthropicStreamer_UnauthorizedMapsToErrAuth(t *testing.T) {
 		}
 	}
 	t.Fatal("expected StreamError, got nothing")
+}
+
+func TestAnthropicToolUseStream(t *testing.T) {
+	srv := httptest.NewServer(sseAnthropic([]sseEvent{
+		{eventType: "message_start", data: `{"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"claude","content":[],"usage":{"input_tokens":10,"output_tokens":0}}}`},
+		{eventType: "content_block_start", data: `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_1","name":"read_file"}}`},
+		{eventType: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"main.go"}}`},
+		{eventType: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"}"}}`},
+		{eventType: "content_block_stop", data: `{"type":"content_block_stop","index":0}`},
+		{eventType: "message_delta", data: `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}`},
+		{eventType: "message_stop", data: `{"type":"message_stop"}`},
+	}))
+	defer srv.Close()
+
+	s := NewAnthropicStreamer("test-key", "claude-sonnet-4-20250514", srv.URL, ThinkingConfig{}, nil)
+	ch, err := s.Stream(context.Background(), "test", []Turn{{Role: "user", Content: "read main.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotTool *ToolCallDelta
+	var sawDone bool
+	for c := range ch {
+		switch v := c.(type) {
+		case ToolCallDelta:
+			gotTool = &v
+		case Done:
+			sawDone = true
+		case StreamError:
+			t.Fatalf("unexpected stream error: %v", v.Err)
+		}
+	}
+
+	if gotTool == nil {
+		t.Fatal("expected ToolCallDelta")
+	}
+	if gotTool.ToolName != "read_file" {
+		t.Fatalf("got tool name %s, want read_file", gotTool.ToolName)
+	}
+	if gotTool.CallID != "call_1" {
+		t.Fatalf("got call ID %s, want call_1", gotTool.CallID)
+	}
+	expected := `{"path":"main.go"}`
+	if string(gotTool.ArgsJSON) != expected {
+		t.Fatalf("got args %s, want %s", gotTool.ArgsJSON, expected)
+	}
+	if !sawDone {
+		t.Fatal("expected Done chunk at end of stream")
+	}
+}
+
+func TestAnthropicToolUseWithTextStream(t *testing.T) {
+	srv := httptest.NewServer(sseAnthropic([]sseEvent{
+		{eventType: "message_start", data: `{"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"claude","content":[],"usage":{"input_tokens":10,"output_tokens":0}}}`},
+		{eventType: "content_block_start", data: `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`},
+		{eventType: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I'll read the file."}}`},
+		{eventType: "content_block_stop", data: `{"type":"content_block_stop","index":0}`},
+		{eventType: "content_block_start", data: `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_2","name":"read_file"}}`},
+		{eventType: "content_block_delta", data: `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"main.go\"}"}}`},
+		{eventType: "content_block_stop", data: `{"type":"content_block_stop","index":1}`},
+		{eventType: "message_delta", data: `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}`},
+		{eventType: "message_stop", data: `{"type":"message_stop"}`},
+	}))
+	defer srv.Close()
+
+	s := NewAnthropicStreamer("test-key", "claude-test", srv.URL, ThinkingConfig{}, nil)
+	ch, err := s.Stream(context.Background(), "system", []Turn{{Role: "user", Content: "read main.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var text strings.Builder
+	var gotTool *ToolCallDelta
+	for c := range ch {
+		switch v := c.(type) {
+		case TextDelta:
+			text.WriteString(v.Text)
+		case ToolCallDelta:
+			gotTool = &v
+		case StreamError:
+			t.Fatalf("unexpected stream error: %v", v.Err)
+		}
+	}
+
+	if text.String() != "I'll read the file." {
+		t.Errorf("text = %q, want %q", text.String(), "I'll read the file.")
+	}
+	if gotTool == nil {
+		t.Fatal("expected ToolCallDelta")
+	}
+	if gotTool.ToolName != "read_file" {
+		t.Fatalf("got tool name %s, want read_file", gotTool.ToolName)
+	}
+	expected := `{"path":"main.go"}`
+	if string(gotTool.ArgsJSON) != expected {
+		t.Fatalf("got args %s, want %s", gotTool.ArgsJSON, expected)
+	}
 }

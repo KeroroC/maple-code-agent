@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -14,13 +15,14 @@ type AnthropicStreamer struct {
 	client anthropic.Client
 	model  string
 	think  ThinkingConfig
+	tools  []anthropic.ToolParam
 }
 
 // NewAnthropicStreamer builds a streamer pointed at baseURL (use the official
 // https://api.anthropic.com for production). thinking controls whether extended
 // thinking is requested; callers must only set thinking.Enabled when the protocol
 // is anthropic (config validation enforces this).
-func NewAnthropicStreamer(apiKey, model, baseURL string, thinking ThinkingConfig) *AnthropicStreamer {
+func NewAnthropicStreamer(apiKey, model, baseURL string, thinking ThinkingConfig, tools []anthropic.ToolParam) *AnthropicStreamer {
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
@@ -29,6 +31,7 @@ func NewAnthropicStreamer(apiKey, model, baseURL string, thinking ThinkingConfig
 		client: anthropic.NewClient(opts...),
 		model:  model,
 		think:  thinking,
+		tools:  tools,
 	}
 }
 
@@ -52,25 +55,60 @@ func (s *AnthropicStreamer) Stream(ctx context.Context, system string, turns []T
 			},
 		}
 	}
+	if len(s.tools) > 0 {
+		toolParams := make([]anthropic.ToolUnionParam, len(s.tools))
+		for i, t := range s.tools {
+			toolParams[i] = anthropic.ToolUnionParam{OfTool: &t}
+		}
+		params.Tools = toolParams
+	}
 
 	stream := s.client.Messages.NewStreaming(ctx, params)
 	go func() {
 		defer close(out)
-		var inputTokens, outputTokens int64
+		var (
+			inputTokens, outputTokens int64
+			toolID, toolName          string
+			toolInput                 string
+			inToolBlock               bool
+		)
 		for stream.Next() {
 			event := stream.Current()
 			switch v := event.AsAny().(type) {
+			case anthropic.ContentBlockStartEvent:
+				if v.ContentBlock.Type == "tool_use" {
+					inToolBlock = true
+					toolID = v.ContentBlock.ID
+					toolName = v.ContentBlock.Name
+					toolInput = ""
+				}
 			case anthropic.ContentBlockDeltaEvent:
-				delta := v.Delta.AsAny()
-				switch d := delta.(type) {
-				case anthropic.TextDelta:
-					if d.Text != "" {
-						out <- TextDelta{Text: d.Text}
+				if inToolBlock {
+					if jsonDelta, ok := v.Delta.AsAny().(anthropic.InputJSONDelta); ok {
+						toolInput += jsonDelta.PartialJSON
 					}
-				case anthropic.ThinkingDelta:
-					if d.Thinking != "" {
-						out <- ThinkingDelta{Text: d.Thinking}
+				} else {
+					delta := v.Delta.AsAny()
+					switch d := delta.(type) {
+					case anthropic.TextDelta:
+						if d.Text != "" {
+							out <- TextDelta{Text: d.Text}
+						}
+					case anthropic.ThinkingDelta:
+						if d.Thinking != "" {
+							out <- ThinkingDelta{Text: d.Thinking}
+						}
 					}
+				}
+			case anthropic.ContentBlockStopEvent:
+				if inToolBlock {
+					out <- ToolCallDelta{
+						CallID:   toolID,
+						ToolName: toolName,
+						ArgsJSON: json.RawMessage(toolInput),
+					}
+					inToolBlock = false
+					toolID, toolName, toolInput = "", "", ""
 				}
 			case anthropic.MessageStartEvent:
 				inputTokens = v.Message.Usage.InputTokens
