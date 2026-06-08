@@ -181,3 +181,99 @@ func splitLines(s string) []string {
 	}
 	return out
 }
+
+func TestToolCallAndResultRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.jsonl")
+	s, err := New(path, Metadata{ID: "test", Protocol: "anthropic", Model: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Append a tool call
+	tc := ToolCall{
+		CallID:   "call_1",
+		ToolName: "read_file",
+		Args:     json.RawMessage(`{"path":"main.go"}`),
+	}
+	if err := s.AppendToolCall(tc); err != nil {
+		t.Fatal(err)
+	}
+
+	// Append a tool result
+	tr := ToolResult{
+		CallID:   "call_1",
+		ToolName: "read_file",
+		Result:   json.RawMessage(`{"ok":true,"content":"package main"}`),
+		Summary:  "read 11 bytes",
+	}
+	if err := s.AppendToolResult(tr); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	// Re-open and verify
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := s2.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("got %d calls, want 1", len(calls))
+	}
+	if calls[0].CallID != "call_1" || calls[0].ToolName != "read_file" {
+		t.Fatalf("unexpected call: %+v", calls[0])
+	}
+	results := s2.ToolResults()
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Summary != "read 11 bytes" {
+		t.Fatalf("unexpected summary: %s", results[0].Summary)
+	}
+}
+
+func TestOldSessionWithOnlyTurns(t *testing.T) {
+	// Create a session with only turns (old format)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.jsonl")
+	s, err := New(path, Metadata{ID: "old", Protocol: "anthropic", Model: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Append(Turn{Role: "user", Content: "hello"})
+	s.Append(Turn{Role: "assistant", Content: "hi"})
+	s.Close()
+
+	// Re-open - should work fine
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := s2.Snapshot()
+	if len(turns) != 2 {
+		t.Fatalf("got %d turns, want 2", len(turns))
+	}
+	if len(s2.ToolCalls()) != 0 {
+		t.Fatal("expected no tool calls")
+	}
+}
+
+func TestBadToolRecordSkipped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.jsonl")
+	// Write a valid meta line followed by a bad tool_call line
+	os.WriteFile(path, []byte(`{"type":"meta","id":"test","created":"2024-01-01T00:00:00Z","protocol":"anthropic","model":"claude"}
+{"type":"tool_call","bad json
+{"type":"turn","role":"user","content":"hello"}
+`), 0o644)
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := s.Snapshot()
+	if len(turns) != 1 {
+		t.Fatalf("got %d turns, want 1", len(turns))
+	}
+}

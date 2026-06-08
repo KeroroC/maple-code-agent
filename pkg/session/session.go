@@ -31,6 +31,23 @@ type Turn struct {
 	Interrupted bool
 }
 
+// ToolCall is a persisted tool invocation.
+type ToolCall struct {
+	CallID   string
+	ToolName string
+	Args     json.RawMessage
+	TS       time.Time
+}
+
+// ToolResult is a persisted tool execution result.
+type ToolResult struct {
+	CallID   string
+	ToolName string
+	Result   json.RawMessage
+	Summary  string
+	TS       time.Time
+}
+
 // Snapshot returns a copy of the in-memory turn list. Callers may mutate the result
 // without affecting the session.
 func (s *Session) Snapshot() []Turn {
@@ -38,6 +55,24 @@ func (s *Session) Snapshot() []Turn {
 	defer s.mu.Unlock()
 	out := make([]Turn, len(s.turns))
 	copy(out, s.turns)
+	return out
+}
+
+// ToolCalls returns a copy of the in-memory tool call list.
+func (s *Session) ToolCalls() []ToolCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ToolCall, len(s.toolCalls))
+	copy(out, s.toolCalls)
+	return out
+}
+
+// ToolResults returns a copy of the in-memory tool result list.
+func (s *Session) ToolResults() []ToolResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ToolResult, len(s.toolResults))
+	copy(out, s.toolResults)
 	return out
 }
 
@@ -62,22 +97,43 @@ type metaRecord struct {
 
 // turnRecord is the on-disk shape of every subsequent line.
 type turnRecord struct {
-	Type       string    `json:"type"`
-	Role       string    `json:"role"`
-	Content    string    `json:"content"`
-	TS         time.Time `json:"ts,omitempty"`
-	Interrupted bool     `json:"interrupted,omitempty"`
+	Type        string    `json:"type"`
+	Role        string    `json:"role"`
+	Content     string    `json:"content"`
+	TS          time.Time `json:"ts,omitempty"`
+	Interrupted bool      `json:"interrupted,omitempty"`
+}
+
+// toolCallRecord is the on-disk shape for tool call entries.
+type toolCallRecord struct {
+	Type     string          `json:"type"` // "tool_call"
+	CallID   string          `json:"call_id"`
+	ToolName string          `json:"tool_name"`
+	Args     json.RawMessage `json:"args"`
+	TS       time.Time       `json:"ts"`
+}
+
+// toolResultRecord is the on-disk shape for tool result entries.
+type toolResultRecord struct {
+	Type     string          `json:"type"` // "tool_result"
+	CallID   string          `json:"call_id"`
+	ToolName string          `json:"tool_name"`
+	Result   json.RawMessage `json:"result"`
+	Summary  string          `json:"summary"`
+	TS       time.Time       `json:"ts"`
 }
 
 // Session holds the current in-memory turns and an open JSONL file for appends.
 // Use New to create a fresh session, Open to resume an existing one.
 type Session struct {
-	path string
-	meta Metadata
-	mu   sync.Mutex
-	turns []Turn
-	file  *os.File
-	w     *bufio.Writer
+	path        string
+	meta        Metadata
+	mu          sync.Mutex
+	turns       []Turn
+	toolCalls   []ToolCall
+	toolResults []ToolResult
+	file        *os.File
+	w           *bufio.Writer
 }
 
 // New creates a new session at path, writes the metadata header, and returns the
@@ -143,6 +199,30 @@ func Open(path string) (*Session, error) {
 				Timestamp:   tr.TS,
 				Interrupted: tr.Interrupted,
 			})
+			continue
+		}
+
+		var tcr toolCallRecord
+		if err := json.Unmarshal(line, &tcr); err == nil && tcr.Type == "tool_call" {
+			s.toolCalls = append(s.toolCalls, ToolCall{
+				CallID:   tcr.CallID,
+				ToolName: tcr.ToolName,
+				Args:     tcr.Args,
+				TS:       tcr.TS,
+			})
+			continue
+		}
+
+		var trr toolResultRecord
+		if err := json.Unmarshal(line, &trr); err == nil && trr.Type == "tool_result" {
+			s.toolResults = append(s.toolResults, ToolResult{
+				CallID:   trr.CallID,
+				ToolName: trr.ToolName,
+				Result:   trr.Result,
+				Summary:  trr.Summary,
+				TS:       trr.TS,
+			})
+			continue
 		}
 		// else: skip unparseable line
 	}
@@ -167,6 +247,69 @@ func (s *Session) Append(turn Turn) error {
 		Content:     turn.Content,
 		TS:          turn.Timestamp,
 		Interrupted: turn.Interrupted,
+	}
+	if rec.TS.IsZero() {
+		rec.TS = time.Now().UTC()
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	if _, err := s.w.Write(data); err != nil {
+		return err
+	}
+	if _, err := s.w.WriteString("\n"); err != nil {
+		return err
+	}
+	return s.w.Flush()
+}
+
+// AppendToolCall records a tool call in memory and writes a JSONL line to disk.
+func (s *Session) AppendToolCall(tc ToolCall) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolCalls = append(s.toolCalls, tc)
+	if s.w == nil {
+		return nil
+	}
+	rec := toolCallRecord{
+		Type:     "tool_call",
+		CallID:   tc.CallID,
+		ToolName: tc.ToolName,
+		Args:     tc.Args,
+		TS:       tc.TS,
+	}
+	if rec.TS.IsZero() {
+		rec.TS = time.Now().UTC()
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	if _, err := s.w.Write(data); err != nil {
+		return err
+	}
+	if _, err := s.w.WriteString("\n"); err != nil {
+		return err
+	}
+	return s.w.Flush()
+}
+
+// AppendToolResult records a tool result in memory and writes a JSONL line to disk.
+func (s *Session) AppendToolResult(tr ToolResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolResults = append(s.toolResults, tr)
+	if s.w == nil {
+		return nil
+	}
+	rec := toolResultRecord{
+		Type:     "tool_result",
+		CallID:   tr.CallID,
+		ToolName: tr.ToolName,
+		Result:   tr.Result,
+		Summary:  tr.Summary,
+		TS:       tr.TS,
 	}
 	if rec.TS.IsZero() {
 		rec.TS = time.Now().UTC()
