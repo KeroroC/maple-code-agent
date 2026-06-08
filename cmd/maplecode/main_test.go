@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +15,7 @@ import (
 	"maplecode/pkg/config"
 	"maplecode/pkg/provider"
 	"maplecode/pkg/session"
+	"maplecode/pkg/tool"
 	"maplecode/pkg/tui"
 )
 
@@ -76,9 +80,12 @@ func newTestApp(t *testing.T, st provider.Streamer) (*app, *fakeSender) {
 	}
 	t.Cleanup(func() { _ = sess.Close() })
 
+	registry := tool.NewRegistry()
+	registry.Register(&tool.ReadFileTool{Root: dir})
+
 	chat := tui.New(sess, st, "m", false, 0)
 	cfg := &config.Config{Protocol: "anthropic", Model: "m", SystemPrompt: "test"}
-	a := newApp(chat, st, sess, cfg, dir)
+	a := newApp(chat, st, sess, cfg, dir, registry)
 	sender := &fakeSender{}
 	a.program = sender
 	return a, sender
@@ -321,5 +328,169 @@ func TestOnKey_CompactCommandSummarizes(t *testing.T) {
 	want := "User asked about Go. Assistant explained channels."
 	if snap[0].Content != want {
 		t.Errorf("summary = %q, want %q", snap[0].Content, want)
+	}
+}
+
+func TestToolExecution(t *testing.T) {
+	dir := t.TempDir()
+	// Create a test file for the tool to read.
+	if err := os.WriteFile(filepath.Join(dir, "test.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	sessPath := filepath.Join(dir, "test.jsonl")
+	sess, err := session.New(sessPath, session.Metadata{
+		ID: "test", Created: time.Now().UTC(), Protocol: "anthropic", Model: "claude",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	registry := tool.NewRegistry()
+	registry.Register(&tool.ReadFileTool{Root: dir})
+
+	streamer := provider.NewScriptedStreamer([]provider.Chunk{
+		provider.ToolCallDelta{
+			CallID:   "call_1",
+			ToolName: "read_file",
+			ArgsJSON: json.RawMessage(`{"path":"test.txt"}`),
+		},
+	})
+
+	chat := tui.New(sess, streamer, "claude", false, 0)
+	cfg := &config.Config{Protocol: "anthropic", Model: "claude"}
+	a := newApp(chat, streamer, sess, cfg, dir, registry)
+	sender := &fakeSender{}
+	a.program = sender
+
+	// Simulate user submission.
+	a.Model.UserSubmitted("read test.txt")
+	a.streaming = true
+
+	// Directly call Update with a ToolCallDelta chunk to trigger tool execution.
+	// This simulates what happens when the streaming goroutine delivers the chunk.
+	msg, _ := a.Update(chunkMsg{c: provider.ToolCallDelta{
+		CallID:   "call_1",
+		ToolName: "read_file",
+		ArgsJSON: json.RawMessage(`{"path":"test.txt"}`),
+	}})
+	_ = msg
+
+	// Wait for the tool execution goroutine to complete and send the result.
+	deadline := time.After(2 * time.Second)
+	for {
+		msgs := sender.Snapshot()
+		hasToolResult := false
+		for _, m := range msgs {
+			if _, ok := m.(toolResultMsg); ok {
+				hasToolResult = true
+				break
+			}
+		}
+		if hasToolResult {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for tool result; messages so far: %+v", msgs)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	// Process the toolResultMsg through Update.
+	msgs := sender.Snapshot()
+	for _, m := range msgs {
+		if tr, ok := m.(toolResultMsg); ok {
+			a.Update(tr)
+		}
+	}
+
+	// Verify session has the tool call.
+	calls := sess.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(calls))
+	}
+	if calls[0].ToolName != "read_file" {
+		t.Errorf("tool call name = %q, want read_file", calls[0].ToolName)
+	}
+	if calls[0].CallID != "call_1" {
+		t.Errorf("tool call ID = %q, want call_1", calls[0].CallID)
+	}
+
+	// Verify session has the tool result.
+	results := sess.ToolResults()
+	if len(results) != 1 {
+		t.Fatalf("got %d tool results, want 1", len(results))
+	}
+	if results[0].ToolName != "read_file" {
+		t.Errorf("tool result name = %q, want read_file", results[0].ToolName)
+	}
+
+	// Verify the result content contains the file contents.
+	var tr tool.ToolResult
+	if err := json.Unmarshal(results[0].Result, &tr); err != nil {
+		t.Fatalf("unmarshal tool result: %v", err)
+	}
+	if !tr.OK {
+		t.Errorf("tool result OK = false, want true; error: %s", tr.Error)
+	}
+	if !strings.Contains(tr.Content, "hello") {
+		t.Errorf("tool result content = %q, want it to contain 'hello'", tr.Content)
+	}
+
+	// Verify the toolResultMsg was delivered with correct summary.
+	var lastToolResult toolResultMsg
+	for _, m := range msgs {
+		if tr, ok := m.(toolResultMsg); ok {
+			lastToolResult = tr
+		}
+	}
+	if lastToolResult.name != "read_file" {
+		t.Errorf("toolResultMsg name = %q, want read_file", lastToolResult.name)
+	}
+	if !lastToolResult.ok {
+		t.Errorf("toolResultMsg ok = false, want true")
+	}
+	if !strings.Contains(lastToolResult.summary, "hello") {
+		t.Errorf("toolResultMsg summary = %q, want it to contain 'hello'", lastToolResult.summary)
+	}
+
+	// Verify streaming was set to false after tool result.
+	if a.streaming {
+		t.Error("streaming should be false after tool result")
+	}
+}
+
+func TestConvertSchema(t *testing.T) {
+	schema := tool.ParamSchema{
+		Type: "object",
+		Properties: map[string]tool.Property{
+			"path": {Type: "string", Description: "file path"},
+			"line": {Type: "integer", Description: "line number"},
+		},
+		Required: []string{"path"},
+	}
+	result := convertSchema(schema)
+	if result["type"] != "object" {
+		t.Errorf("type = %v, want object", result["type"])
+	}
+	props, ok := result["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("properties is not map[string]any")
+	}
+	pathProp, ok := props["path"].(map[string]any)
+	if !ok {
+		t.Fatal("path property is not map[string]any")
+	}
+	if pathProp["type"] != "string" {
+		t.Errorf("path type = %v, want string", pathProp["type"])
+	}
+	reqs, ok := result["required"].([]string)
+	if !ok {
+		t.Fatal("required is not []string")
+	}
+	if len(reqs) != 1 || reqs[0] != "path" {
+		t.Errorf("required = %v, want [path]", reqs)
 	}
 }

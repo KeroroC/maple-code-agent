@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"maplecode/pkg/logx"
 	"maplecode/pkg/provider"
 	"maplecode/pkg/session"
+	"maplecode/pkg/tool"
 	"maplecode/pkg/tui"
 )
 
@@ -66,17 +68,6 @@ func run(configPath string, debug bool, resumeID string) error {
 	logx.Info("maplecode starting protocol=%s model=%s", cfg.Protocol, cfg.Model)
 	logx.Debug("config loaded base_url=%s thinking_enabled=%t budget=%d", cfg.BaseURL, cfg.Thinking.Enabled, cfg.Thinking.BudgetTokens)
 
-	streamer, err := provider.NewStreamer(provider.StreamerConfig{
-		Protocol: cfg.Protocol,
-		Model:    cfg.Model,
-		BaseURL:  cfg.BaseURL,
-		APIKey:   cfg.APIKey,
-		Thinking: provider.ThinkingConfig{Enabled: cfg.Thinking.Enabled, BudgetTokens: cfg.Thinking.BudgetTokens},
-	})
-	if err != nil {
-		return err
-	}
-
 	sess, err := openOrCreateSession(cfg, configPath, resumeID)
 	if err != nil {
 		return err
@@ -84,9 +75,44 @@ func run(configPath string, debug bool, resumeID string) error {
 	defer sess.Close()
 	logx.Info("session opened id=%s", sess.ID())
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+
+	registry := tool.NewRegistry()
+	registry.Register(&tool.ReadFileTool{Root: cwd})
+	registry.Register(&tool.WriteFileTool{Root: cwd})
+	registry.Register(&tool.EditFileTool{Root: cwd})
+	registry.Register(&tool.RunCommandTool{Root: cwd})
+	registry.Register(&tool.GlobFilesTool{Root: cwd})
+	registry.Register(&tool.GrepCodeTool{Root: cwd})
+
+	allMeta := registry.AllMeta()
+	providerTools := make([]provider.ToolMeta, len(allMeta))
+	for i, m := range allMeta {
+		providerTools[i] = provider.ToolMeta{
+			Name:        m.Name,
+			Description: m.Description,
+			InputSchema: convertSchema(m.Params),
+		}
+	}
+
+	streamer, err := provider.NewStreamer(provider.StreamerConfig{
+		Protocol: cfg.Protocol,
+		Model:    cfg.Model,
+		BaseURL:  cfg.BaseURL,
+		APIKey:   cfg.APIKey,
+		Thinking: provider.ThinkingConfig{Enabled: cfg.Thinking.Enabled, BudgetTokens: cfg.Thinking.BudgetTokens},
+		Tools:    providerTools,
+	})
+	if err != nil {
+		return err
+	}
+
 	sessionsDir := filepath.Join(filepath.Dir(configPath), "sessions")
 	chat := tui.New(sess, streamer, cfg.Model, cfg.Thinking.Enabled, cfg.Thinking.BudgetTokens)
-	app := newApp(chat, streamer, sess, cfg, sessionsDir)
+	app := newApp(chat, streamer, sess, cfg, sessionsDir, registry)
 	prog := tea.NewProgram(app, tea.WithAltScreen())
 	app.setProgram(prog)
 	_, err = prog.Run()
@@ -158,13 +184,14 @@ type app struct {
 	program     chunkSender
 	streaming   bool
 	sessionsDir string
+	registry    *tool.Registry
 	viewport    viewport.Model
 	textarea    textarea.Model
 	width       int
 	height      int
 }
 
-func newApp(m *tui.Model, s provider.Streamer, sess *session.Session, cfg *config.Config, sessionsDir string) *app {
+func newApp(m *tui.Model, s provider.Streamer, sess *session.Session, cfg *config.Config, sessionsDir string, registry *tool.Registry) *app {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	ta := textarea.New()
@@ -188,6 +215,7 @@ func newApp(m *tui.Model, s provider.Streamer, sess *session.Session, cfg *confi
 		ctx:         ctx,
 		cancel:      cancel,
 		sessionsDir: sessionsDir,
+		registry:    registry,
 		textarea:    ta,
 		viewport:    vp,
 		width:       80,
@@ -235,17 +263,62 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return a.onKey(v)
 
+	case toolResultMsg:
+		a.Model.SetToolResult(v.name, v.ok, v.summary)
+		a.streaming = false
+		a.refreshView()
+		return a, nil
+
 	case chunkMsg:
 		a.Model.HandleChunk(v.c)
 		a.refreshView()
-		if _, done := v.c.(provider.Done); done {
+		switch c := v.c.(type) {
+		case provider.Done:
 			a.streaming = false
 			return a, nil
-		}
-		if se, ok := v.c.(provider.StreamError); ok {
-			if errors.Is(se.Err, provider.ErrCanceled) {
+		case provider.StreamError:
+			if errors.Is(c.Err, provider.ErrCanceled) {
 				a.streaming = false
 			}
+			return a, nil
+		case provider.ToolCallDelta:
+			// Execute the tool in a goroutine.
+			go func() {
+				t, err := a.registry.Lookup(c.ToolName)
+				var result tool.ToolResult
+				if err != nil {
+					result = tool.ToolResult{OK: false, Error: err.Error()}
+				} else {
+					result = t.Execute(c.ArgsJSON)
+				}
+				// Write tool call to session.
+				_ = a.sess.AppendToolCall(session.ToolCall{
+					CallID:   c.CallID,
+					ToolName: c.ToolName,
+					Args:     c.ArgsJSON,
+				})
+				// Write tool result to session.
+				resultJSON, _ := json.Marshal(result)
+				summary := result.Content
+				if !result.OK {
+					summary = result.Error
+				}
+				_ = a.sess.AppendToolResult(session.ToolResult{
+					CallID:   c.CallID,
+					ToolName: c.ToolName,
+					Result:   resultJSON,
+					Summary:  summary,
+				})
+				// Send result back to TUI.
+				if a.program != nil {
+					a.program.Send(toolResultMsg{
+						name:    c.ToolName,
+						ok:      result.OK,
+						summary: summary,
+					})
+				}
+			}()
+			return a, nil
 		}
 		return a, nil
 	}
@@ -344,6 +417,33 @@ func (a *app) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // chunkMsg carries one provider.Chunk through the Bubble Tea Update loop.
 type chunkMsg struct{ c provider.Chunk }
 
+// toolResultMsg carries a tool execution result back to the Update loop.
+type toolResultMsg struct {
+	name    string
+	ok      bool
+	summary string
+}
+
+// convertSchema converts a tool.ParamSchema to the map[string]any format
+// expected by provider.ToolMeta.InputSchema.
+func convertSchema(s tool.ParamSchema) map[string]any {
+	props := make(map[string]any)
+	for k, v := range s.Properties {
+		props[k] = map[string]any{
+			"type":        v.Type,
+			"description": v.Description,
+		}
+	}
+	result := map[string]any{
+		"type":       s.Type,
+		"properties": props,
+	}
+	if len(s.Required) > 0 {
+		result["required"] = s.Required
+	}
+	return result
+}
+
 // startStream kicks off a goroutine that drives the streamer and converts each
 // chunk into a tea.Msg. It returns a tea.Cmd that runs the goroutine; the
 // goroutine uses program.Send so the chunks arrive back in Update without
@@ -369,12 +469,18 @@ func (a *app) startStream() tea.Cmd {
 			}
 			return nil
 		}
+		var sawToolCall bool
 		for c := range ch {
 			if prog != nil {
 				prog.Send(chunkMsg{c: c})
 			}
+			if _, ok := c.(provider.ToolCallDelta); ok {
+				sawToolCall = true
+			}
 		}
-		if prog != nil {
+		// When a tool call was received, the tool result handler will set
+		// streaming=false, so we skip sending Done here.
+		if prog != nil && !sawToolCall {
 			prog.Send(chunkMsg{c: provider.Done{}})
 		}
 		return nil
