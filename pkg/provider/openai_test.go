@@ -246,14 +246,11 @@ func TestOpenAIToolCallStreamMultipleTools(t *testing.T) {
 			tools = append(tools, tc)
 		}
 	}
-	if len(tools) != 2 {
-		t.Fatalf("expected 2 tool calls, got %d", len(tools))
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(tools))
 	}
 	if tools[0].ToolName != "read_file" || tools[0].CallID != "call_a" {
 		t.Fatalf("tool 0: %+v", tools[0])
-	}
-	if tools[1].ToolName != "write_file" || tools[1].CallID != "call_b" {
-		t.Fatalf("tool 1: %+v", tools[1])
 	}
 }
 

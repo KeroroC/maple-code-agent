@@ -111,13 +111,11 @@ func (s *OpenAIStreamer) Stream(ctx context.Context, system string, turns []Turn
 			return
 		}
 		if finishReason == "tool_calls" {
-			for i := 0; i < len(toolCalls); i++ {
-				if tc, ok := toolCalls[i]; ok {
-					out <- ToolCallDelta{
-						CallID:   tc.id,
-						ToolName: tc.name,
-						ArgsJSON: json.RawMessage(tc.args),
-					}
+			if tc, ok := toolCalls[0]; ok {
+				out <- ToolCallDelta{
+					CallID:   tc.id,
+					ToolName: tc.name,
+					ArgsJSON: json.RawMessage(tc.args),
 				}
 			}
 		} else {
