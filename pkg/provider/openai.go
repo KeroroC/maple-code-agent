@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -13,11 +14,12 @@ import (
 type OpenAIStreamer struct {
 	client openai.Client
 	model  string
+	tools  []openai.ChatCompletionToolParam
 }
 
 // NewOpenAIStreamer builds a streamer. baseURL is the API root, e.g. https://api.openai.com
 // for OpenAI itself or any OpenAI-compatible gateway URL.
-func NewOpenAIStreamer(apiKey, model, baseURL string) *OpenAIStreamer {
+func NewOpenAIStreamer(apiKey, model, baseURL string, tools []openai.ChatCompletionToolParam) *OpenAIStreamer {
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
@@ -25,6 +27,7 @@ func NewOpenAIStreamer(apiKey, model, baseURL string) *OpenAIStreamer {
 	return &OpenAIStreamer{
 		client: openai.NewClient(opts...),
 		model:  model,
+		tools:  tools,
 	}
 }
 
@@ -53,10 +56,20 @@ func (s *OpenAIStreamer) Stream(ctx context.Context, system string, turns []Turn
 	}
 	// Ask the server to send usage in the final chunk so we can report it in Done.
 	params.StreamOptions.IncludeUsage = openai.Bool(true)
+	if len(s.tools) > 0 {
+		params.Tools = s.tools
+	}
 
 	stream := s.client.Chat.Completions.NewStreaming(ctx, params)
 	go func() {
 		defer close(out)
+		type toolCallState struct {
+			id   string
+			name string
+			args string
+		}
+		toolCalls := make(map[int]*toolCallState)
+		finishReason := ""
 		var inputTokens, outputTokens int64
 		for stream.Next() {
 			evt := stream.Current()
@@ -64,6 +77,28 @@ func (s *OpenAIStreamer) Stream(ctx context.Context, system string, turns []Turn
 				delta := evt.Choices[0].Delta
 				if delta.Content != "" {
 					out <- TextDelta{Text: delta.Content}
+				}
+				for _, tc := range delta.ToolCalls {
+					if tc.Index >= 0 {
+						idx := int(tc.Index)
+						state, ok := toolCalls[idx]
+						if !ok {
+							state = &toolCallState{}
+							toolCalls[idx] = state
+						}
+						if tc.ID != "" {
+							state.id = tc.ID
+						}
+						if tc.Function.Name != "" {
+							state.name = tc.Function.Name
+						}
+						if tc.Function.Arguments != "" {
+							state.args += tc.Function.Arguments
+						}
+					}
+				}
+				if evt.Choices[0].FinishReason == "tool_calls" {
+					finishReason = "tool_calls"
 				}
 			}
 			if evt.Usage.PromptTokens > 0 || evt.Usage.CompletionTokens > 0 {
@@ -75,7 +110,19 @@ func (s *OpenAIStreamer) Stream(ctx context.Context, system string, turns []Turn
 			out <- StreamError{Err: classifyOpenAIErr(err)}
 			return
 		}
-		out <- Done{Usage: Usage{InputTokens: int(inputTokens), OutputTokens: int(outputTokens)}}
+		if finishReason == "tool_calls" {
+			for i := 0; i < len(toolCalls); i++ {
+				if tc, ok := toolCalls[i]; ok {
+					out <- ToolCallDelta{
+						CallID:   tc.id,
+						ToolName: tc.name,
+						ArgsJSON: json.RawMessage(tc.args),
+					}
+				}
+			}
+		} else {
+			out <- Done{Usage: Usage{InputTokens: int(inputTokens), OutputTokens: int(outputTokens)}}
+		}
 	}()
 
 	return out, nil
