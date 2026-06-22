@@ -8,30 +8,28 @@ import (
 	"maplecode/pkg/provider"
 )
 
-// Compact summarizes the current session using the given streamer, writes an
-// end-marker to the old JSONL file, and returns a fresh Session whose first turn
-// is a system message containing the summary.
+// Compact 使用给定的流式传输器对当前会话进行摘要，向旧 JSONL 文件写入结束标记，
+// 并返回一个新会话，其第一个轮次是包含摘要的系统消息。
 //
-// The new session's file path and id are passed in by the caller (typically
-// derived from the current time + a new slug).
+// 新会话的文件路径和 id 由调用者传入（通常基于当前时间 + 新标识）。
 func (s *Session) Compact(ctx context.Context, streamer provider.Streamer, newPath, newID string, now time.Time) (*Session, error) {
 	if s.file == nil {
 		return nil, fmt.Errorf("compact: session is read-only")
 	}
 
-	// Snapshot the current turns so we can hand them to the streamer.
+	// 快照当前轮次，以便交给流式传输器。
 	turns := s.Snapshot()
 	wireTurns := make([]provider.Turn, len(turns))
 	for i, t := range turns {
 		wireTurns[i] = provider.Turn{Role: t.Role, Content: t.Content}
 	}
 
-	// Append a hidden user message asking the model to summarize.
+	// 追加一个隐藏的用户消息，请求模型进行摘要。
 	summaryPrompt := "Please summarize the conversation so far in 500 words or less. " +
 		"Preserve all decisions, code snippets, and user constraints."
 	wireTurns = append(wireTurns, provider.Turn{Role: "user", Content: summaryPrompt})
 
-	// Drive the streamer and accumulate the response.
+	// 驱动流式传输器并累积响应。
 	ch, err := streamer.Stream(ctx, "", wireTurns)
 	if err != nil {
 		return nil, fmt.Errorf("compact: stream: %w", err)
@@ -48,7 +46,7 @@ func (s *Session) Compact(ctx context.Context, streamer provider.Streamer, newPa
 		}
 	}
 
-	// Write the end marker to the old file and close it.
+	// 向旧文件写入结束标记并关闭它。
 	if _, err := s.file.WriteString(`{"type":"end","reason":"compact"}` + "\n"); err != nil {
 		return nil, fmt.Errorf("compact: write end marker: %w", err)
 	}
@@ -61,7 +59,7 @@ func (s *Session) Compact(ctx context.Context, streamer provider.Streamer, newPa
 	s.file = nil
 	s.w = nil
 
-	// Create the new session with the summary as its first system turn.
+	// 创建新会话，摘要作为其第一个系统轮次。
 	newSess, err := New(newPath, Metadata{
 		ID:       newID,
 		Created:  now,

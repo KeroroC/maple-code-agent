@@ -10,15 +10,15 @@ import (
 	"github.com/openai/openai-go/option"
 )
 
-// OpenAIStreamer streams completions from any OpenAI-compatible /v1/chat/completions endpoint.
+// OpenAIStreamer 从任何 OpenAI 兼容的 /v1/chat/completions 端点流式获取补全。
 type OpenAIStreamer struct {
 	client openai.Client
 	model  string
 	tools  []openai.ChatCompletionToolParam
 }
 
-// NewOpenAIStreamer builds a streamer. baseURL is the API root, e.g. https://api.openai.com
-// for OpenAI itself or any OpenAI-compatible gateway URL.
+// NewOpenAIStreamer 构建流式传输器。baseURL 是 API 根地址，例如 OpenAI 自身的
+// https://api.openai.com 或任何 OpenAI 兼容的网关 URL。
 func NewOpenAIStreamer(apiKey, model, baseURL string, tools []openai.ChatCompletionToolParam) *OpenAIStreamer {
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
@@ -31,7 +31,7 @@ func NewOpenAIStreamer(apiKey, model, baseURL string, tools []openai.ChatComplet
 	}
 }
 
-// Stream opens a streaming chat completion and pushes normalized Chunks to the returned channel.
+// Stream 打开流式聊天补全并将标准化的 Chunk 推送到返回的通道。
 func (s *OpenAIStreamer) Stream(ctx context.Context, system string, turns []Turn) (<-chan Chunk, error) {
 	out := make(chan Chunk, 32)
 
@@ -54,7 +54,7 @@ func (s *OpenAIStreamer) Stream(ctx context.Context, system string, turns []Turn
 		Model:    s.model,
 		Messages: messages,
 	}
-	// Ask the server to send usage in the final chunk so we can report it in Done.
+	// 请求服务器在最后一个 chunk 中发送 usage，以便在 Done 中报告。
 	params.StreamOptions.IncludeUsage = openai.Bool(true)
 	if len(s.tools) > 0 {
 		params.Tools = s.tools
@@ -126,7 +126,7 @@ func (s *OpenAIStreamer) Stream(ctx context.Context, system string, turns []Turn
 	return out, nil
 }
 
-// classifyOpenAIErr maps OpenAI SDK / HTTP errors onto our sentinel set.
+// classifyOpenAIErr 将 OpenAI SDK / HTTP 错误映射到我们的哨兵错误集。
 func classifyOpenAIErr(err error) error {
 	if err == nil {
 		return nil

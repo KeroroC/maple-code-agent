@@ -6,16 +6,15 @@ import (
 	"strings"
 )
 
-// Command is a parsed slash command. Kind names map 1:1 to Model methods.
+// Command 是解析后的斜杠命令。Kind 名称与 Model 方法 1:1 映射。
 type Command struct {
 	Kind string
 	Args string
 }
 
-// ParseCommand takes the raw input the user typed (which may or may not start
-// with a slash) and returns (kind, args, ok). ok is false only when the input
-// is not a command at all. Unknown command names return ("unknown", input, true)
-// so the caller can render a friendly "unknown command" error.
+// ParseCommand 接受用户输入的原始文本（可能以斜杠开头也可能不以斜杠开头）
+// 并返回 (kind, args, ok)。ok 仅在输入根本不是命令时为 false。
+// 未知命令名称返回 ("unknown", input, true)，以便调用者可以渲染友好的"未知命令"错误。
 func ParseCommand(input string) (string, string, bool) {
 	input = strings.TrimSpace(input)
 	if !strings.HasPrefix(input, "/") {
@@ -30,7 +29,7 @@ func ParseCommand(input string) (string, string, bool) {
 	return "unknown", input, true
 }
 
-// HelpText returns the multi-line help text rendered when the user types /help.
+// HelpText 返回用户输入 /help 时渲染的多行帮助文本。
 func HelpText() string {
 	return strings.Join([]string{
 		"Available commands:",
@@ -44,9 +43,8 @@ func HelpText() string {
 	}, "\n")
 }
 
-// ExecuteCommand applies a parsed command to the model. Returns an error for
-// malformed arguments or unknown commands; the caller should display the error
-// inline in the conversation area.
+// ExecuteCommand 将解析后的命令应用到模型。对于格式错误的参数或未知命令返回错误；
+// 调用者应在对话区域中内联显示错误。
 func (m *Model) ExecuteCommand(cmd Command) error {
 	switch cmd.Kind {
 	case "clear":
@@ -61,8 +59,7 @@ func (m *Model) ExecuteCommand(cmd Command) error {
 		m.model = cmd.Args
 		return nil
 	case "resume", "compact", "help", "exit":
-		// These need access to filesystem / program control; defer them to the
-		// bubbletea Update path so the model stays decoupled from the program.
+		// 这些需要访问文件系统/程序控制；推迟到 bubbletea Update 路径，使模型与程序解耦。
 		return fmt.Errorf("/%s is handled by the program, not the model", cmd.Kind)
 	case "unknown":
 		return fmt.Errorf("unknown command: %s. Type /help.", cmd.Args)

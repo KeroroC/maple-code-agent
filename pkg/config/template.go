@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-// templateBody is the starter config the user sees on first run.
+// templateBody 是用户首次运行时看到的初始配置。
 const templateBody = `# MapleCode configuration
 # On first run MapleCode generated this file. Please fill in your api_key
 # (and adjust protocol, model, base_url as needed) then re-run.
@@ -26,8 +26,8 @@ thinking:
 system_prompt: ""
 `
 
-// WriteTemplate ensures the parent directory exists, then writes the default config template
-// to path. It is safe to call multiple times; existing files are not overwritten.
+// WriteTemplate 确保父目录存在，然后将默认配置模板写入指定路径。
+// 可以安全地多次调用；不会覆盖已存在的文件。
 func WriteTemplate(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)

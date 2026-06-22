@@ -1,6 +1,6 @@
-// Package session maintains an in-memory turn list and persists it to a JSONL file.
-// Each session has a metadata header (first line) followed by one record per turn.
-// Writes are serialized with a mutex; concurrent appends never interleave on disk.
+// Package session 维护内存中的轮次列表并将其持久化到 JSONL 文件。
+// 每个会话有一个元数据头（第一行），后面每个轮次一条记录。
+// 写入通过互斥锁序列化；并发追加永远不会在磁盘上交错。
 package session
 
 import (
@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// Metadata is the JSONL header written when a session is created.
+// Metadata 是创建会话时写入的 JSONL 头。
 type Metadata struct {
 	ID       string    `json:"id"`
 	Created  time.Time `json:"created"`
@@ -22,8 +22,8 @@ type Metadata struct {
 	Model    string    `json:"model"`
 }
 
-// Turn is one user or assistant message. The Timestamp/Interrupted fields are
-// optional and populated when the value is non-zero / true.
+// Turn 是一条用户或助手消息。Timestamp/Interrupted 字段是可选的，
+// 当值非零/为 true 时填充。
 type Turn struct {
 	Role        string
 	Content     string
@@ -31,7 +31,7 @@ type Turn struct {
 	Interrupted bool
 }
 
-// ToolCall is a persisted tool invocation.
+// ToolCall 是持久化的工具调用。
 type ToolCall struct {
 	CallID   string
 	ToolName string
@@ -39,7 +39,7 @@ type ToolCall struct {
 	TS       time.Time
 }
 
-// ToolResult is a persisted tool execution result.
+// ToolResult 是持久化的工具执行结果。
 type ToolResult struct {
 	CallID   string
 	ToolName string
@@ -48,8 +48,7 @@ type ToolResult struct {
 	TS       time.Time
 }
 
-// Snapshot returns a copy of the in-memory turn list. Callers may mutate the result
-// without affecting the session.
+// Snapshot 返回内存中轮次列表的副本。调用者可以修改结果而不影响会话。
 func (s *Session) Snapshot() []Turn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -58,7 +57,7 @@ func (s *Session) Snapshot() []Turn {
 	return out
 }
 
-// ToolCalls returns a copy of the in-memory tool call list.
+// ToolCalls 返回内存中工具调用列表的副本。
 func (s *Session) ToolCalls() []ToolCall {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,7 +66,7 @@ func (s *Session) ToolCalls() []ToolCall {
 	return out
 }
 
-// ToolResults returns a copy of the in-memory tool result list.
+// ToolResults 返回内存中工具结果列表的副本。
 func (s *Session) ToolResults() []ToolResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -76,17 +75,17 @@ func (s *Session) ToolResults() []ToolResult {
 	return out
 }
 
-// ID returns the session identifier (timestamp + slug).
+// ID 返回会话标识符（时间戳 + 标识）。
 func (s *Session) ID() string {
 	return s.meta.ID
 }
 
-// Path returns the JSONL file path on disk.
+// Path 返回磁盘上的 JSONL 文件路径。
 func (s *Session) Path() string {
 	return s.path
 }
 
-// metaRecord is the on-disk shape of the first JSONL line.
+// metaRecord 是第一行 JSONL 的磁盘格式。
 type metaRecord struct {
 	Type     string    `json:"type"`
 	ID       string    `json:"id"`
@@ -95,7 +94,7 @@ type metaRecord struct {
 	Model    string    `json:"model"`
 }
 
-// turnRecord is the on-disk shape of every subsequent line.
+// turnRecord 是后续每行的磁盘格式。
 type turnRecord struct {
 	Type        string    `json:"type"`
 	Role        string    `json:"role"`
@@ -104,7 +103,7 @@ type turnRecord struct {
 	Interrupted bool      `json:"interrupted,omitempty"`
 }
 
-// toolCallRecord is the on-disk shape for tool call entries.
+// toolCallRecord 是工具调用条目的磁盘格式。
 type toolCallRecord struct {
 	Type     string          `json:"type"` // "tool_call"
 	CallID   string          `json:"call_id"`
@@ -113,7 +112,7 @@ type toolCallRecord struct {
 	TS       time.Time       `json:"ts"`
 }
 
-// toolResultRecord is the on-disk shape for tool result entries.
+// toolResultRecord 是工具结果条目的磁盘格式。
 type toolResultRecord struct {
 	Type     string          `json:"type"` // "tool_result"
 	CallID   string          `json:"call_id"`
@@ -123,8 +122,8 @@ type toolResultRecord struct {
 	TS       time.Time       `json:"ts"`
 }
 
-// Session holds the current in-memory turns and an open JSONL file for appends.
-// Use New to create a fresh session, Open to resume an existing one.
+// Session 持有当前内存中的轮次和用于追加的已打开 JSONL 文件。
+// 使用 New 创建新会话，使用 Open 恢复已有会话。
 type Session struct {
 	path        string
 	meta        Metadata
@@ -136,8 +135,8 @@ type Session struct {
 	w           *bufio.Writer
 }
 
-// New creates a new session at path, writes the metadata header, and returns the
-// session ready for Append. The parent directory must already exist.
+// New 在指定路径创建新会话，写入元数据头，并返回准备好进行 Append 的会话。
+// 父目录必须已存在。
 func New(path string, meta Metadata) (*Session, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir: %w", err)
@@ -160,9 +159,9 @@ func New(path string, meta Metadata) (*Session, error) {
 	return s, nil
 }
 
-// Open reads an existing session file. Lines that fail to parse are silently
-// skipped (a warning is logged via the caller's logx package, but session keeps
-// a minimal contract: no errors bubble up for corrupt lines).
+// Open 读取现有的会话文件。解析失败的行会被静默跳过
+// （通过调用者的 logx 包记录警告，但会话保持最小契约：
+// 损坏的行不会冒泡错误）。
 func Open(path string) (*Session, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -233,7 +232,7 @@ func Open(path string) (*Session, error) {
 	return s, nil
 }
 
-// Append records a turn in memory and writes a JSONL line to disk.
+// Append 在内存中记录一个轮次并写入一行 JSONL 到磁盘。
 func (s *Session) Append(turn Turn) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -264,7 +263,7 @@ func (s *Session) Append(turn Turn) error {
 	return s.w.Flush()
 }
 
-// AppendToolCall records a tool call in memory and writes a JSONL line to disk.
+// AppendToolCall 在内存中记录工具调用并写入一行 JSONL 到磁盘。
 func (s *Session) AppendToolCall(tc ToolCall) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -295,7 +294,7 @@ func (s *Session) AppendToolCall(tc ToolCall) error {
 	return s.w.Flush()
 }
 
-// AppendToolResult records a tool result in memory and writes a JSONL line to disk.
+// AppendToolResult 在内存中记录工具结果并写入一行 JSONL 到磁盘。
 func (s *Session) AppendToolResult(tr ToolResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -327,8 +326,7 @@ func (s *Session) AppendToolResult(tr ToolResult) error {
 	return s.w.Flush()
 }
 
-// Close flushes any buffered writes and closes the underlying file. It is safe
-// to call on a session that was opened read-only.
+// Close 刷新所有缓冲写入并关闭底层文件。对以只读方式打开的会话调用是安全的。
 func (s *Session) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -370,14 +368,13 @@ func (s *Session) writeMeta() error {
 	return s.w.Flush()
 }
 
-// idFromTimestamp formats a time as YYYYMMDD-HHMMSS in UTC.
+// idFromTimestamp 将时间格式化为 UTC 的 YYYYMMDD-HHMMSS。
 func idFromTimestamp(t time.Time) string {
 	return t.UTC().Format("20060102-150405")
 }
 
-// slugify converts a free-form string to a filesystem-safe slug of up to 20 chars.
-// Non-alphanumeric runes become "-", runs of "-" are collapsed, and leading/trailing
-// "-" are trimmed.
+// slugify 将自由格式字符串转换为最多 20 个字符的文件系统安全标识。
+// 非字母数字字符变为 "-"，连续的 "-" 被合并，前后的 "-" 被去除。
 func slugify(s string) string {
 	const maxLen = 20
 	var b strings.Builder

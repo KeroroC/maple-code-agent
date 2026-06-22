@@ -2,10 +2,13 @@ package tui
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"maplecode/pkg/provider"
+	"maplecode/pkg/session"
 )
 
 // Test that submitting a user turn transitions the model into the streaming state
@@ -213,4 +216,96 @@ func TestRenderMessage_ToolStatus(t *testing.T) {
 	if !strings.Contains(rendered, "done") {
 		t.Fatalf("expected 'done' in rendered output: %s", rendered)
 	}
+}
+
+// Test that session restoration hydrates tool status from tool records.
+func TestNew_HydratesToolStatus(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.jsonl")
+
+	// Write a session file with turns and tool records.
+	lines := []string{
+		`{"type":"meta","id":"test","created":"2025-01-01T00:00:00Z","protocol":"anthropic","model":"test"}`,
+		`{"type":"turn","role":"user","content":"read main.go"}`,
+		`{"type":"turn","role":"assistant","content":"I'll read the file"}`,
+		`{"type":"tool_call","call_id":"call_1","tool_name":"read_file","args":{},"ts":"2025-01-01T00:00:01Z"}`,
+		`{"type":"tool_result","call_id":"call_1","tool_name":"read_file","result":{"ok":true,"content":"..."},"summary":"read 100 bytes","ts":"2025-01-01T00:00:02Z"}`,
+		`{"type":"turn","role":"assistant","content":"Here is the file content"}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := session.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	m := New(s, provider.NewScriptedStreamer(nil), "test-model", false, 0)
+
+	// The assistant message "I'll read the file" should have tool status.
+	var foundToolStatus bool
+	for _, msg := range m.messages {
+		if msg.role == "assistant" && msg.content == "I'll read the file" && msg.toolCall != nil {
+			foundToolStatus = true
+			if msg.toolCall.name != "read_file" {
+				t.Errorf("tool name = %q, want read_file", msg.toolCall.name)
+			}
+			if !msg.toolCall.done {
+				t.Error("expected tool to be done")
+			}
+			if msg.toolCall.failed {
+				t.Error("expected tool to not be failed")
+			}
+			if msg.toolCall.summary != "read 100 bytes" {
+				t.Errorf("summary = %q, want %q", msg.toolCall.summary, "read 100 bytes")
+			}
+		}
+	}
+	if !foundToolStatus {
+		t.Error("expected tool status on assistant message after hydration")
+	}
+
+	// The "Here is the file content" message should NOT have tool status.
+	for _, msg := range m.messages {
+		if msg.role == "assistant" && msg.content == "Here is the file content" && msg.toolCall != nil {
+			t.Error("second assistant message should not have tool status")
+		}
+	}
+}
+
+// Test that session restoration handles failed tool results.
+func TestNew_HydratesFailedToolStatus(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.jsonl")
+
+	lines := []string{
+		`{"type":"meta","id":"test","created":"2025-01-01T00:00:00Z","protocol":"anthropic","model":"test"}`,
+		`{"type":"turn","role":"user","content":"read missing.go"}`,
+		`{"type":"turn","role":"assistant","content":"I'll try to read it"}`,
+		`{"type":"tool_call","call_id":"call_1","tool_name":"read_file","args":{},"ts":"2025-01-01T00:00:01Z"}`,
+		`{"type":"tool_result","call_id":"call_1","tool_name":"read_file","result":{"ok":false,"content":"file not found"},"summary":"file not found","ts":"2025-01-01T00:00:02Z"}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := session.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	m := New(s, provider.NewScriptedStreamer(nil), "test-model", false, 0)
+
+	for _, msg := range m.messages {
+		if msg.role == "assistant" && msg.content == "I'll try to read it" && msg.toolCall != nil {
+			if !msg.toolCall.failed {
+				t.Error("expected tool to be failed")
+			}
+			return
+		}
+	}
+	t.Error("expected tool status on assistant message")
 }

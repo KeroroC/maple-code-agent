@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// WorkspacePath resolves a user-supplied relative path against root and
-// ensures the result stays within root after cleaning and symlink resolution.
-// Absolute paths are rejected.
+// WorkspacePath 将用户提供的相对路径解析到 root 下，
+// 并确保结果在清理和符号链接解析后仍在 root 内。
+// 绝对路径会被拒绝。
 func WorkspacePath(root, input string) (string, error) {
 	if filepath.IsAbs(input) {
 		return "", fmt.Errorf("absolute path not allowed: %s", input)

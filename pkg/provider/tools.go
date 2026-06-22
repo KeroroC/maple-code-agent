@@ -8,14 +8,14 @@ import (
 	"github.com/openai/openai-go"
 )
 
-// ToolMeta mirrors tool.ToolMeta to avoid circular imports.
+// ToolMeta 镜像 tool.ToolMeta 以避免循环导入。
 type ToolMeta struct {
 	Name        string
 	Description string
 	InputSchema map[string]any // raw JSON Schema
 }
 
-// ToAnthropicTools converts tool metadata into Anthropic API tool definitions.
+// ToAnthropicTools 将工具元数据转换为 Anthropic API 工具定义。
 func ToAnthropicTools(metas []ToolMeta) []anthropic.ToolParam {
 	out := make([]anthropic.ToolParam, len(metas))
 	for i, m := range metas {
@@ -30,7 +30,7 @@ func ToAnthropicTools(metas []ToolMeta) []anthropic.ToolParam {
 	return out
 }
 
-// ToOpenAITools converts tool metadata into OpenAI API tool definitions.
+// ToOpenAITools 将工具元数据转换为 OpenAI API 工具定义。
 func ToOpenAITools(metas []ToolMeta) []openai.ChatCompletionToolParam {
 	out := make([]openai.ChatCompletionToolParam, len(metas))
 	for i, m := range metas {

@@ -1,16 +1,17 @@
-// Package tui implements the Bubble Tea-based terminal UI for MapleCode.
+// Package tui 实现了 MapleCode 基于 Bubble Tea 的终端 UI。
 //
-// The Model type owns:
-//   - the list of conversation messages (each with its own state machine)
-//   - the current session metadata
-//   - a reference to the active provider.Streamer
+// Model 类型拥有：
+//   - 对话消息列表（每条消息有自己的状态机）
+//   - 当前会话元数据
+//   - 活动 provider.Streamer 的引用
 //
-// Pure-logic operations (handleChunk, userSubmitted, toggleThinking, clearConversation,
-// renderStatusBar) are exposed so unit tests can drive the model without spinning up
-// a real bubbletea program. The bubbletea-facing Init/Update/View glue lives in update.go.
+// 纯逻辑操作（handleChunk、userSubmitted、toggleThinking、clearConversation、
+// renderStatusBar）被暴露，以便单元测试可以在不启动真实 bubbletea 程序的情况下驱动模型。
+// 面向 bubbletea 的 Init/Update/View 粘合层位于 update.go。
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,16 +22,16 @@ import (
 	"maplecode/pkg/session"
 )
 
-// Role styles for rendering messages.
+// 用于渲染消息的角色样式。
 var (
-	roleUserStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))  // cyan
-	roleAssistantStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))  // green
-	roleSystemStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))  // yellow
-	thinkingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))             // gray
-	errorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))             // red
+	roleUserStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6")) // cyan
+	roleAssistantStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2")) // green
+	roleSystemStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3")) // yellow
+	thinkingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))            // gray
+	errorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))            // red
 )
 
-// msgState tracks where a single message is in its lifecycle.
+// msgState 跟踪单条消息在其生命周期中的位置。
 type msgState int
 
 const (
@@ -57,7 +58,7 @@ func (s msgState) String() string {
 	return "unknown"
 }
 
-// toolStatus tracks an in-progress or completed tool execution for display.
+// toolStatus 跟踪进行中或已完成的工具执行以供显示。
 type toolStatus struct {
 	name    string
 	done    bool
@@ -65,7 +66,7 @@ type toolStatus struct {
 	summary string
 }
 
-// message is one user or assistant turn rendered in the conversation area.
+// message 是在对话区域中渲染的一条用户或助手轮次。
 type message struct {
 	role             string
 	content          string
@@ -76,21 +77,20 @@ type message struct {
 	toolCall         *toolStatus // non-nil when this message has a tool call
 }
 
-// Model is the top-level TUI model. It is exported because main.go and the
-// bubbletea program must construct it, but only the methods defined in this
-// package should be used to mutate it.
+// Model 是顶层 TUI 模型。它被导出是因为 main.go 和 bubbletea 程序必须构造它，
+// 但只有本包中定义的方法应该用于修改它。
 type Model struct {
 	streamer provider.Streamer
 	session  *session.Session
 
-	model    string // current model name, used in the status bar
-	messages []message
+	model           string // current model name, used in the status bar
+	messages        []message
 	thinkingEnabled bool
 	thinkingBudget  int
 }
 
-// newTestModel builds a Model with a scripted streamer and no backing session.
-// Used by unit tests; production code calls New instead.
+// newTestModel 构建一个带有脚本化流式传输器且无后端会话的 Model。
+// 用于单元测试；生产代码调用 New。
 func newTestModel() *Model {
 	return &Model{
 		streamer: provider.NewScriptedStreamer(nil),
@@ -98,7 +98,7 @@ func newTestModel() *Model {
 	}
 }
 
-// New builds a Model bound to a real session and streamer.
+// New 构建绑定到真实会话和流式传输器的 Model。
 func New(s *session.Session, streamer provider.Streamer, modelName string, thinkingEnabled bool, thinkingBudget int) *Model {
 	m := &Model{
 		streamer:        streamer,
@@ -108,16 +108,16 @@ func New(s *session.Session, streamer provider.Streamer, modelName string, think
 		thinkingBudget:  thinkingBudget,
 		messages:        []message{},
 	}
-	// If the session has prior turns, hydrate the message list from them.
+	// 如果会话有之前的轮次，从它们填充消息列表。
 	for _, t := range s.Snapshot() {
 		m.messages = append(m.messages, message{role: t.Role, content: t.Content, state: stateDone})
 	}
+	m.hydrateToolStatus(s)
 	return m
 }
 
-// Snapshot returns the in-memory messages projected as session.Turn values, so
-// callers outside the tui package (e.g. the bubbletea View in main.go) can
-// iterate them without depending on internal types.
+// Snapshot 将内存中的消息投影为 session.Turn 值返回，
+// 以便 tui 包外部的调用者（例如 main.go 中的 bubbletea View）可以遍历它们而不依赖内部类型。
 func (m *Model) Snapshot() []session.Turn {
 	out := make([]session.Turn, len(m.messages))
 	for i, msg := range m.messages {
@@ -126,10 +126,8 @@ func (m *Model) Snapshot() []session.Turn {
 	return out
 }
 
-// UserSubmitted appends the given text as a user turn and creates a streaming
-// assistant message placeholder. It does NOT actually call the streamer; the
-// caller (the bubbletea Update path) is expected to kick off the stream
-// asynchronously after this returns.
+// UserSubmitted 将给定文本作为用户轮次追加，并创建一个流式助手消息占位符。
+// 它不会实际调用流式传输器；调用者（bubbletea Update 路径）应在此返回后异步启动流。
 func (m *Model) UserSubmitted(text string) {
 	m.messages = append(m.messages, message{role: "user", content: text, state: stateDone})
 	if m.session != nil {
@@ -138,9 +136,8 @@ func (m *Model) UserSubmitted(text string) {
 	m.messages = append(m.messages, message{role: "assistant", content: "", state: stateStreaming})
 }
 
-// HandleChunk processes a single Chunk emitted by the streamer and updates the
-// current (last) assistant message accordingly. Canceled errors land in state
-// stateInterrupted; any other error lands in stateError.
+// HandleChunk 处理流式传输器发出的单个 Chunk，并相应地更新当前（最后一个）助手消息。
+// 取消错误进入 stateInterrupted 状态；任何其他错误进入 stateError 状态。
 func (m *Model) HandleChunk(c provider.Chunk) {
 	if len(m.messages) == 0 {
 		return
@@ -171,7 +168,7 @@ func (m *Model) HandleChunk(c provider.Chunk) {
 	}
 }
 
-// SetToolResult marks the most recent tool call with the given name as done or failed.
+// SetToolResult 将具有给定名称的最近工具调用标记为完成或失败。
 func (m *Model) SetToolResult(toolName string, ok bool, summary string) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		if m.messages[i].toolCall != nil && m.messages[i].toolCall.name == toolName && !m.messages[i].toolCall.done {
@@ -183,18 +180,18 @@ func (m *Model) SetToolResult(toolName string, ok bool, summary string) {
 	}
 }
 
-// AppendSystemMessage adds a synthetic system message to the conversation area.
+// AppendSystemMessage 向对话区域添加合成的系统消息。
 func (m *Model) AppendSystemMessage(text string) {
 	m.messages = append(m.messages, message{role: "system", content: text, state: stateDone})
 }
 
-// AppendSystemError adds a synthetic message that displays the given error text
-// inline. Used by the bubbletea glue when /clear / /help / etc surface a problem.
+// AppendSystemError 添加一条合成消息，在行内显示给定的错误文本。
+// 当 /clear、/help 等命令出现问题时由 bubbletea 粘合层使用。
 func (m *Model) AppendSystemError(text string) {
 	m.messages = append(m.messages, message{role: "system", content: "[error] " + text, state: stateDone})
 }
 
-// toggleThinking flips the thinking expansion flag for the i-th message.
+// toggleThinking 翻转第 i 条消息的思考展开标志。
 func (m *Model) toggleThinking(i int) {
 	if i < 0 || i >= len(m.messages) {
 		return
@@ -202,23 +199,51 @@ func (m *Model) toggleThinking(i int) {
 	m.messages[i].thinkingExpanded = !m.messages[i].thinkingExpanded
 }
 
-// SetSession replaces the current session and reloads messages from it.
-// Used by /resume and /compact which swap the underlying session file.
+// SetSession 替换当前会话并从中重新加载消息。
+// 用于 /resume 和 /compact，它们会替换底层会话文件。
 func (m *Model) SetSession(s *session.Session) {
 	m.session = s
 	m.messages = []message{}
 	for _, t := range s.Snapshot() {
 		m.messages = append(m.messages, message{role: t.Role, content: t.Content, state: stateDone})
 	}
+	m.hydrateToolStatus(s)
 }
 
-// clearConversation empties the in-memory message list and resets the session.
+// hydrateToolStatus 将会话中的工具结果与助手消息关联，
+// 为每个工具结果在第一个未分配的助手消息上设置 toolCall 字段（按顺序匹配）。
+func (m *Model) hydrateToolStatus(s *session.Session) {
+	for _, tr := range s.ToolResults() {
+		ok := true
+		var result map[string]any
+		if json.Unmarshal(tr.Result, &result) == nil {
+			if v, exists := result["ok"]; exists {
+				if b, isBool := v.(bool); isBool {
+					ok = b
+				}
+			}
+		}
+		// 查找第一个没有 toolCall 的助手消息。
+		for i := 0; i < len(m.messages); i++ {
+			if m.messages[i].role == "assistant" && m.messages[i].toolCall == nil {
+				m.messages[i].toolCall = &toolStatus{
+					name:    tr.ToolName,
+					done:    true,
+					failed:  !ok,
+					summary: tr.Summary,
+				}
+				break
+			}
+		}
+	}
+}
+
+// clearConversation 清空内存中的消息列表并重置会话。
 func (m *Model) clearConversation() {
 	m.messages = []message{}
 }
 
-// RenderStatusBar produces the single-line status string. It includes the
-// current model name so the user always knows which backend is active.
+// RenderStatusBar 生成单行状态字符串。它包含当前模型名称，以便用户始终知道哪个后端处于活动状态。
 func (m *Model) RenderStatusBar() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "model: %s", m.model)
@@ -228,8 +253,7 @@ func (m *Model) RenderStatusBar() string {
 	return b.String()
 }
 
-// MessageView is a read-only snapshot of a single message, exported so main.go
-// can reason about message state without depending on internal types.
+// MessageView 是单条消息的只读快照，导出以便 main.go 可以在不依赖内部类型的情况下判断消息状态。
 type MessageView struct {
 	Role             string
 	Content          string
@@ -239,7 +263,7 @@ type MessageView struct {
 	State            string // "pending", "streaming", "done", "interrupted", "error"
 }
 
-// MessageViews returns a snapshot of all messages as exported MessageView values.
+// MessageViews 返回所有消息的快照，作为导出的 MessageView 值。
 func (m *Model) MessageViews() []MessageView {
 	out := make([]MessageView, len(m.messages))
 	for i, msg := range m.messages {
@@ -255,7 +279,7 @@ func (m *Model) MessageViews() []MessageView {
 	return out
 }
 
-// LastMessageHasThinking reports whether the last message has thinking content.
+// LastMessageHasThinking 报告最后一条消息是否有思考内容。
 func (m *Model) LastMessageHasThinking() bool {
 	if len(m.messages) == 0 {
 		return false
@@ -263,15 +287,15 @@ func (m *Model) LastMessageHasThinking() bool {
 	return m.messages[len(m.messages)-1].thinking != ""
 }
 
-// ToggleThinkingExported flips the thinking expansion flag for the i-th message.
-// This is the exported version of toggleThinking for use by the app layer.
+// ToggleThinkingExported 翻转第 i 条消息的思考展开标志。
+// 这是 toggleThinking 的导出版本，供 app 层使用。
 func (m *Model) ToggleThinkingExported(i int) {
 	m.toggleThinking(i)
 }
 
-// RenderMessage renders a single message to a styled string.
-// For done assistant messages, the content is rendered through glamour (markdown).
-// Thinking blocks are shown collapsed or expanded based on the message state.
+// RenderMessage 将单条消息渲染为带样式的字符串。
+// 对于已完成的助手消息，内容通过 glamour（markdown）渲染。
+// 思考块根据消息状态显示为折叠或展开。
 func (m *Model) RenderMessage(i int) string {
 	if i < 0 || i >= len(m.messages) {
 		return ""
@@ -280,7 +304,7 @@ func (m *Model) RenderMessage(i int) string {
 
 	var b strings.Builder
 
-	// Role prefix.
+	// 角色前缀。
 	roleLabel := msg.role
 	switch msg.role {
 	case "user":
@@ -295,7 +319,7 @@ func (m *Model) RenderMessage(i int) string {
 	b.WriteString(roleLabel)
 	b.WriteByte('\n')
 
-	// Thinking block (if any).
+	// 思考块（如果有）。
 	if msg.thinking != "" {
 		if msg.thinkingExpanded {
 			b.WriteString(thinkingStyle.Render(msg.thinking))
@@ -306,7 +330,7 @@ func (m *Model) RenderMessage(i int) string {
 		}
 	}
 
-	// Content.
+	// 内容。
 	content := msg.content
 	if msg.state == stateDone && msg.role == "assistant" && content != "" {
 		rendered := renderMarkdown(content)
@@ -315,7 +339,7 @@ func (m *Model) RenderMessage(i int) string {
 		}
 	}
 
-	// State indicators.
+	// 状态指示器。
 	switch msg.state {
 	case stateStreaming:
 		if content == "" {
@@ -332,7 +356,7 @@ func (m *Model) RenderMessage(i int) string {
 
 	b.WriteString(content)
 
-	// Tool status line.
+	// 工具状态行。
 	if msg.toolCall != nil {
 		b.WriteString("\n")
 		if msg.toolCall.done {
@@ -351,7 +375,7 @@ func (m *Model) RenderMessage(i int) string {
 	return b.String()
 }
 
-// RenderMessages renders all messages into a single string suitable for a viewport.
+// RenderMessages 将所有消息渲染为适合视口的单个字符串。
 func (m *Model) RenderMessages() string {
 	var b strings.Builder
 	for i := range m.messages {

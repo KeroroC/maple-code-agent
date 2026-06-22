@@ -1,4 +1,4 @@
-// Package config loads, validates, and writes the MapleCode configuration file.
+// Package config 负责加载、验证和写入 MapleCode 配置文件。
 package config
 
 import (
@@ -10,15 +10,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DefaultSystemPrompt is the system prompt used when the YAML file does not override it.
+// DefaultSystemPrompt 是当 YAML 文件未覆盖时使用的默认系统提示词。
 const DefaultSystemPrompt = "You are a coding assistant. Help users write, debug, and improve code.\nBe concise unless asked for details. Output code in markdown blocks."
 
-// ErrConfigNotFound is returned by Load when the config file does not exist on disk.
-// After receiving this error, callers should exit cleanly because WriteTemplate has
-// already created a starter file at the requested path.
+// ErrConfigNotFound 由 Load 在配置文件不存在时返回。
+// 收到此错误后，调用者应正常退出，因为 WriteTemplate 已在请求路径创建了初始文件。
 var ErrConfigNotFound = errors.New("config file not found; template written")
 
-// Config holds all user-tunable settings loaded from the YAML file.
+// Config 包含从 YAML 文件加载的所有用户可配置设置。
 type Config struct {
 	Protocol     string   `yaml:"protocol"`
 	Model        string   `yaml:"model"`
@@ -28,15 +27,15 @@ type Config struct {
 	SystemPrompt string   `yaml:"system_prompt"`
 }
 
-// Thinking controls Anthropic extended thinking. Only honored when Protocol is "anthropic".
+// Thinking 控制 Anthropic 扩展思考功能。仅当 Protocol 为 "anthropic" 时生效。
 type Thinking struct {
 	Enabled      bool `yaml:"enabled"`
 	BudgetTokens int  `yaml:"budget_tokens"`
 }
 
-// Load reads the YAML config at path. If the file does not exist, it writes the default
-// template and returns ErrConfigNotFound (caller should exit 0 with a friendly message).
-// If the file exists but is malformed or invalid, a descriptive error is returned.
+// Load 读取指定路径的 YAML 配置。如果文件不存在，会写入默认模板并返回
+// ErrConfigNotFound（调用者应以 0 退出并显示友好消息）。
+// 如果文件存在但格式错误或无效，会返回描述性错误。
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -59,7 +58,7 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-// Validate checks the parsed config for required fields and cross-field constraints.
+// Validate 检查已解析配置的必填字段和跨字段约束。
 func (c *Config) Validate() error {
 	if c.APIKey == "" {
 		return errors.New("api_key is required in config")
@@ -70,8 +69,8 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// DefaultPath returns the conventional config path: $HOME/.maplecode/config.yaml.
-// Tests should construct paths explicitly via t.TempDir instead of relying on this.
+// DefaultPath 返回常规配置路径：$HOME/.maplecode/config.yaml。
+// 测试应通过 t.TempDir 显式构造路径，而不是依赖此函数。
 func DefaultPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

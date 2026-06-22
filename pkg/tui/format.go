@@ -1,22 +1,10 @@
 package tui
 
 import (
-	"fmt"
 	"strconv"
 )
 
-// fmtInt and fmtFloat1 are tiny formatters so markdown.go doesn't import "fmt"
-// just for Sprintf calls. They are unexported and only used inside the tui
-// package.
-func fmtInt(i int) string       { return strconv.Itoa(i) }
+// fmtInt 和 fmtFloat1 是小型格式化器，这样 markdown.go 就不需要仅为 Sprintf 调用而导入 "fmt"。
+// 它们未导出，仅在 tui 包内部使用。
+func fmtInt(i int) string        { return strconv.Itoa(i) }
 func fmtFloat1(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) }
-
-func formatToolStatus(name string, done, failed bool) string {
-	if done {
-		if failed {
-			return fmt.Sprintf("tool: %s ... failed", name)
-		}
-		return fmt.Sprintf("tool: %s ... done", name)
-	}
-	return fmt.Sprintf("tool: %s ... running", name)
-}

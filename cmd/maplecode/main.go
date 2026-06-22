@@ -1,9 +1,8 @@
-// MapleCode is a terminal AI coding assistant.
+// MapleCode 是一个终端 AI 编程助手。
 //
-// main.go wires together config loading, logging, the provider streamer, the
-// session, and a Bubble Tea program. The TUI state machine lives in pkg/tui;
-// this file is a thin orchestrator that also implements the Bubble Tea glue
-// (key handling, the chunk-to-msg pump, and graceful shutdown).
+// main.go 负责组装配置加载、日志、Provider 流式传输、会话和 Bubble Tea 程序。
+// TUI 状态机位于 pkg/tui；本文件是一个轻量级编排器，同时实现 Bubble Tea 的粘合层
+// （按键处理、chunk 到 msg 的转换、以及优雅退出）。
 package main
 
 import (
@@ -164,32 +163,30 @@ func findSessionFile(dir, resumeID string) (string, error) {
 	return matches[0], nil
 }
 
-// chunkSender is the minimal interface the stream pump needs to push chunks
-// into the Bubble Tea runtime. *tea.Program satisfies it; tests can pass a
-// fake to assert on chunks without running a real TTY-bound program.
+// chunkSender 是流式传输泵将 chunk 推送到 Bubble Tea 运行时所需的最小接口。
+// *tea.Program 满足此接口；测试可以传入 fake 实现来断言 chunk，无需运行真实的 TTY 程序。
 type chunkSender interface {
 	Send(tea.Msg)
 }
 
-// app is the Bubble Tea program. It embeds *tui.Model for the state machine
-// and adds the IO glue: starting a streamer goroutine, converting provider.Chunk
-// values to tea.Msg values, and rendering the viewport.
+// app 是 Bubble Tea 程序。它嵌入 *tui.Model 作为状态机，并添加 IO 粘合层：
+// 启动流式传输 goroutine、将 provider.Chunk 转换为 tea.Msg、以及渲染视口。
 type app struct {
 	*tui.Model
-	streamer    provider.Streamer
-	sess        *session.Session
-	cfg         *config.Config
-	ctx         context.Context
-	cancel      context.CancelFunc
-	program     chunkSender
+	streamer     provider.Streamer
+	sess         *session.Session
+	cfg          *config.Config
+	ctx          context.Context
+	cancel       context.CancelFunc
+	program      chunkSender
 	streaming    bool
 	toolExecuted bool // true after first tool call in current turn
 	sessionsDir  string
 	registry     *tool.Registry
-	viewport    viewport.Model
-	textarea    textarea.Model
-	width       int
-	height      int
+	viewport     viewport.Model
+	textarea     textarea.Model
+	width        int
+	height       int
 }
 
 func newApp(m *tui.Model, s provider.Streamer, sess *session.Session, cfg *config.Config, sessionsDir string, registry *tool.Registry) *app {
@@ -224,27 +221,25 @@ func newApp(m *tui.Model, s provider.Streamer, sess *session.Session, cfg *confi
 	}
 }
 
-// setProgram hands the running Bubble Tea program to the app so the streaming
-// goroutine can push chunks back into Update via Send. Called once, right
-// after tea.NewProgram returns.
+// setProgram 将运行中的 Bubble Tea 程序交给 app，以便流式传输 goroutine
+// 可以通过 Send 将 chunk 推送回 Update。在 tea.NewProgram 返回后调用一次。
 func (a *app) setProgram(p *tea.Program) { a.program = p }
 
-// Init returns the textarea focus command so the cursor blinks from the start.
+// Init 返回 textarea 聚焦命令，使光标从开始时就闪烁。
 func (a *app) Init() tea.Cmd { return a.textarea.Focus() }
 
-// refreshView re-renders all messages into the viewport and scrolls to the bottom.
+// refreshView 将所有消息重新渲染到视口并滚动到底部。
 func (a *app) refreshView() {
 	a.viewport.SetContent(a.Model.RenderMessages())
 	a.viewport.GotoBottom()
 }
 
-// Update is the central event router. KeyMsg drives the input line and the
-// chunkMsg values from the streaming goroutine update the model.
+// Update 是中心事件路由器。KeyMsg 驱动输入行，来自流式传输 goroutine 的 chunkMsg 更新模型。
 func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
-		taCmd  tea.Cmd
-		vpCmd  tea.Cmd
-		cmds   []tea.Cmd
+		taCmd tea.Cmd
+		vpCmd tea.Cmd
+		cmds  []tea.Cmd
 	)
 
 	switch v := msg.(type) {
@@ -336,7 +331,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, tea.Batch(cmds...)
 }
 
-// View renders the three-section layout: viewport, status bar, textarea.
+// View 渲染三段式布局：视口、状态栏、文本输入区。
 func (a *app) View() string {
 	statusBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("0")).
@@ -424,15 +419,14 @@ func (a *app) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // chunkMsg carries one provider.Chunk through the Bubble Tea Update loop.
 type chunkMsg struct{ c provider.Chunk }
 
-// toolResultMsg carries a tool execution result back to the Update loop.
+// toolResultMsg 将工具执行结果传回 Update 循环。
 type toolResultMsg struct {
 	name    string
 	ok      bool
 	summary string
 }
 
-// convertSchema converts a tool.ParamSchema to the map[string]any format
-// expected by provider.ToolMeta.InputSchema.
+// convertSchema 将 tool.ParamSchema 转换为 provider.ToolMeta.InputSchema 所需的 map[string]any 格式。
 func convertSchema(s tool.ParamSchema) map[string]any {
 	props := make(map[string]any)
 	for k, v := range s.Properties {
@@ -451,12 +445,11 @@ func convertSchema(s tool.ParamSchema) map[string]any {
 	return result
 }
 
-// startStream kicks off a goroutine that drives the streamer and converts each
-// chunk into a tea.Msg. It returns a tea.Cmd that runs the goroutine; the
-// goroutine uses program.Send so the chunks arrive back in Update without
-// deadlocking the cmd's return path.
+// startStream 启动一个 goroutine 来驱动流式传输，并将每个 chunk 转换为 tea.Msg。
+// 返回一个运行该 goroutine 的 tea.Cmd；goroutine 使用 program.Send 将 chunk
+// 送回 Update，而不会阻塞 cmd 的返回路径。
 func (a *app) startStream() tea.Cmd {
-	// Create a fresh context so Ctrl+C from a previous stream doesn't poison this one.
+	// 创建新的 context，避免上一次流式传输的 Ctrl+C 影响本次。
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
 
@@ -485,8 +478,7 @@ func (a *app) startStream() tea.Cmd {
 				sawToolCall = true
 			}
 		}
-		// When a tool call was received, the tool result handler will set
-		// streaming=false, so we skip sending Done here.
+		// 当收到工具调用时，工具结果处理器会设置 streaming=false，因此这里跳过发送 Done。
 		if prog != nil && !sawToolCall {
 			prog.Send(chunkMsg{c: provider.Done{}})
 		}
@@ -494,7 +486,7 @@ func (a *app) startStream() tea.Cmd {
 	}
 }
 
-// handleResume loads a previous session by ID prefix and swaps it in.
+// handleResume 根据 ID 前缀加载之前的会话并切换到该会话。
 func (a *app) handleResume(id string) tea.Model {
 	if id == "" {
 		a.Model.AppendSystemError("usage: /resume <id|timestamp>")
@@ -517,7 +509,7 @@ func (a *app) handleResume(id string) tea.Model {
 	return a
 }
 
-// handleCompact summarizes the current session and replaces it with a new one.
+// handleCompact 对当前会话进行摘要并用新会话替换。
 func (a *app) handleCompact() tea.Model {
 	now := time.Now().UTC()
 	newID := now.Format("20060102-150405") + "-compact"
@@ -538,14 +530,12 @@ func (a *app) handleCompact() tea.Model {
 	return a
 }
 
-// wireTurnsFromSession rebuilds the wire-format turn list from the session
-// snapshot, dropping any partially-written assistant turn that the user just
-// submitted (that one is already represented by the streaming placeholder).
+// wireTurnsFromSession 从会话快照重建线路格式的轮次列表，
+// 丢弃用户刚提交的部分写入的助手轮次（该轮次已由流式占位符表示）。
 func wireTurnsFromSession(s *session.Session, _ *tui.Model) []provider.Turn {
 	snap := s.Snapshot()
-	// The last turn (if it's the user message we just submitted) is included
-	// so the model sees it. We keep the snapshot intact and only filter out
-	// a trailing empty assistant turn, which shouldn't normally exist anyway.
+	// 最后一个轮次（如果是刚提交的用户消息）会被包含，以便模型能看到它。
+	// 我们保持快照不变，只过滤掉末尾的空助手轮次（正常情况下不应存在）。
 	out := make([]provider.Turn, 0, len(snap))
 	for _, t := range snap {
 		if t.Role == "system" {

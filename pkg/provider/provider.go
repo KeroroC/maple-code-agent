@@ -1,6 +1,6 @@
-// Package provider defines the Streamer interface and the chunk types that flow through it.
-// Each implementation (anthropic, openai, openai-compatible) is responsible for translating
-// provider-specific events into the normalized Chunk values defined here.
+// Package provider 定义了 Streamer 接口和流经它的 chunk 类型。
+// 每个实现（anthropic、openai、openai-compatible）负责将特定于提供者的事件
+// 转换为此处定义的标准化 Chunk 值。
 package provider
 
 import (
@@ -9,83 +9,80 @@ import (
 	"errors"
 )
 
-// Turn is a single message in the conversation. Role is "user" or "assistant".
-// System instructions are passed separately to Stream and do not appear in the turns slice.
+// Turn 是对话中的单条消息。Role 为 "user" 或 "assistant"。
+// 系统指令单独传递给 Stream，不出现在 turns 切片中。
 type Turn struct {
 	Role    string
 	Content string
 }
 
-// Chunk is the sealed interface implemented by every event that may be emitted on the
-// Stream channel. Callers must use a type switch to extract the payload.
+// Chunk 是密封接口，由 Stream 通道上可能发出的每个事件实现。
+// 调用者必须使用类型 switch 来提取具体载荷。
 type Chunk interface {
 	chunk()
 }
 
-// TextDelta is a fragment of the assistant's final answer.
+// TextDelta 是助手最终回答的片段。
 type TextDelta struct {
 	Text string
 }
 
-// ThinkingDelta is a fragment of the assistant's chain-of-thought.
-// It is only emitted when extended thinking is enabled.
+// ThinkingDelta 是助手思维链的片段。
+// 仅在启用扩展思考时发出。
 type ThinkingDelta struct {
 	Text string
 }
 
-// Usage is the token accounting reported by the provider at the end of a stream.
+// Usage 是提供者在流结束时报告的 token 用量统计。
 type Usage struct {
 	InputTokens  int
 	OutputTokens int
 }
 
-// Done signals that the provider has finished a stream successfully. It carries the
-// final Usage so the caller can update status bars and accounting.
+// Done 表示提供者已成功完成流式传输。它携带最终的 Usage，以便调用者更新状态栏和统计。
 type Done struct {
 	Usage Usage
 }
 
-// StreamError wraps any non-success condition: network failure, auth failure, cancellation,
-// context overflow, etc. The embedded error is one of the package-level sentinels when
-// the failure mode is recognized, otherwise it is the raw provider error.
+// StreamError 包装任何非成功状态：网络失败、认证失败、取消、上下文溢出等。
+// 当失败模式被识别时，嵌入的错误是包级哨兵错误之一，否则是原始的提供者错误。
 type StreamError struct {
 	Err error
 }
 
-// ToolCallDelta signals that the model is requesting a tool invocation.
-// The caller should execute the named tool with the given JSON arguments.
+// ToolCallDelta 表示模型正在请求调用工具。
+// 调用者应使用给定的 JSON 参数执行指定的工具。
 type ToolCallDelta struct {
-	CallID   string          // provider-specific call ID
-	ToolName string          // registered tool name (snake_case)
-	ArgsJSON json.RawMessage // complete JSON arguments
+	CallID   string          // 提供者特定的调用 ID
+	ToolName string          // 注册的工具名称（snake_case）
+	ArgsJSON json.RawMessage // 完整的 JSON 参数
 }
 
-func (TextDelta) chunk()      {}
-func (ThinkingDelta) chunk()  {}
-func (Done) chunk()           {}
-func (StreamError) chunk()    {}
-func (ToolCallDelta) chunk()  {}
+func (TextDelta) chunk()     {}
+func (ThinkingDelta) chunk() {}
+func (Done) chunk()          {}
+func (StreamError) chunk()   {}
+func (ToolCallDelta) chunk() {}
 
-// Sentinel errors. Use errors.Is to classify stream failures.
+// 哨兵错误。使用 errors.Is 来分类流失败。
 var (
-	ErrCanceled       = errors.New("stream canceled")
-	ErrContextLength  = errors.New("context length exceeded")
-	ErrAuth           = errors.New("authentication failed")
-	ErrRateLimit      = errors.New("rate limited")
+	ErrCanceled      = errors.New("stream canceled")
+	ErrContextLength = errors.New("context length exceeded")
+	ErrAuth          = errors.New("authentication failed")
+	ErrRateLimit     = errors.New("rate limited")
 )
 
-// Streamer is the contract every provider backend must implement. It opens a streaming
-// completion request and returns a channel of Chunk values. The channel is closed by
-// the implementation when the stream ends (success, error, or context cancellation).
+// Streamer 是每个提供者后端必须实现的接口。它打开一个流式补全请求
+// 并返回一个 Chunk 值的通道。当流结束（成功、错误或上下文取消）时，
+// 实现会关闭该通道。
 //
-// Implementations must respect ctx cancellation: when ctx.Done() fires, they emit a
-// StreamError wrapping ErrCanceled and then close the channel.
+// 实现必须尊重 ctx 取消：当 ctx.Done() 触发时，发出包装 ErrCanceled 的
+// StreamError，然后关闭通道。
 type Streamer interface {
 	Stream(ctx context.Context, system string, turns []Turn) (<-chan Chunk, error)
 }
 
-// ThinkingConfig is passed to provider constructors so each streamer knows whether to
-// enable extended thinking and how many thinking tokens to budget.
+// ThinkingConfig 传递给提供者构造函数，以便每个流式传输器知道是否启用扩展思考以及预算多少思考 token。
 type ThinkingConfig struct {
 	Enabled      bool
 	BudgetTokens int

@@ -10,7 +10,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
-// AnthropicStreamer streams completions from the Anthropic Messages API.
+// AnthropicStreamer 从 Anthropic Messages API 流式获取补全。
 type AnthropicStreamer struct {
 	client anthropic.Client
 	model  string
@@ -18,10 +18,9 @@ type AnthropicStreamer struct {
 	tools  []anthropic.ToolParam
 }
 
-// NewAnthropicStreamer builds a streamer pointed at baseURL (use the official
-// https://api.anthropic.com for production). thinking controls whether extended
-// thinking is requested; callers must only set thinking.Enabled when the protocol
-// is anthropic (config validation enforces this).
+// NewAnthropicStreamer 构建指向 baseURL 的流式传输器（生产环境使用官方的
+// https://api.anthropic.com）。thinking 控制是否请求扩展思考；
+// 调用者必须仅在协议为 anthropic 时设置 thinking.Enabled（配置验证会强制执行）。
 func NewAnthropicStreamer(apiKey, model, baseURL string, thinking ThinkingConfig, tools []anthropic.ToolParam) *AnthropicStreamer {
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
@@ -35,8 +34,8 @@ func NewAnthropicStreamer(apiKey, model, baseURL string, thinking ThinkingConfig
 	}
 }
 
-// Stream opens a streaming completion and pushes normalized Chunks to the returned
-// channel. The channel is closed on success, on error, or when ctx is canceled.
+// Stream 打开流式补全并将标准化的 Chunk 推送到返回的通道。
+// 通道在成功、错误或 ctx 取消时关闭。
 func (s *AnthropicStreamer) Stream(ctx context.Context, system string, turns []Turn) (<-chan Chunk, error) {
 	out := make(chan Chunk, 32)
 
@@ -126,8 +125,8 @@ func (s *AnthropicStreamer) Stream(ctx context.Context, system string, turns []T
 	return out, nil
 }
 
-// toAnthropicMessages converts our Turn slice into the SDK's MessageParam slice,
-// skipping the system turn (system is passed separately).
+// toAnthropicMessages 将我们的 Turn 切片转换为 SDK 的 MessageParam 切片，
+// 跳过 system 轮次（system 单独传递）。
 func toAnthropicMessages(turns []Turn) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(turns))
 	for _, t := range turns {
@@ -148,7 +147,7 @@ func toAnthropicMessages(turns []Turn) []anthropic.MessageParam {
 	return out
 }
 
-// classifyAnthropicErr maps SDK/HTTP errors onto our sentinel set.
+// classifyAnthropicErr 将 SDK/HTTP 错误映射到我们的哨兵错误集。
 func classifyAnthropicErr(err error) error {
 	if err == nil {
 		return nil

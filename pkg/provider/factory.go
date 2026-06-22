@@ -2,9 +2,8 @@ package provider
 
 import "fmt"
 
-// StreamerConfig captures the subset of user configuration that the provider layer
-// needs. The config package builds this from YAML; passing it in keeps the provider
-// package free of config-package imports.
+// StreamerConfig 捕获提供者层所需的用户配置子集。
+// config 包从 YAML 构建此结构；传入它可以使 provider 包不依赖 config 包的导入。
 type StreamerConfig struct {
 	Protocol string
 	Model    string
@@ -14,9 +13,9 @@ type StreamerConfig struct {
 	Tools    []ToolMeta
 }
 
-// NewStreamer returns a Streamer that matches the given protocol. The base URL is
-// taken from cfg.BaseURL, which means the same constructor works for "openai" (pointing
-// at api.openai.com) and "openai-compatible" (pointing at a third-party gateway).
+// NewStreamer 返回与给定协议匹配的 Streamer。基础 URL 取自 cfg.BaseURL，
+// 这意味着同一个构造函数适用于 "openai"（指向 api.openai.com）
+// 和 "openai-compatible"（指向第三方网关）。
 func NewStreamer(cfg StreamerConfig) (Streamer, error) {
 	switch cfg.Protocol {
 	case "anthropic":
