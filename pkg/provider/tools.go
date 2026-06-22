@@ -19,11 +19,24 @@ type ToolMeta struct {
 func ToAnthropicTools(metas []ToolMeta) []anthropic.ToolParam {
 	out := make([]anthropic.ToolParam, len(metas))
 	for i, m := range metas {
+		// 提取 schema 中的 properties 部分
+		var properties any
+		if props, ok := m.InputSchema["properties"]; ok {
+			properties = props
+		}
+		// 提取 required 字段
+		var required []string
+		if req, ok := m.InputSchema["required"]; ok {
+			if reqSlice, ok := req.([]string); ok {
+				required = reqSlice
+			}
+		}
 		out[i] = anthropic.ToolParam{
 			Name:        m.Name,
 			Description: anthropic.String(m.Description),
 			InputSchema: anthropic.ToolInputSchemaParam{
-				Properties: m.InputSchema,
+				Properties: properties,
+				Required:   required,
 			},
 		}
 	}
